@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
 
@@ -9,7 +10,7 @@ namespace Stabilization
 {
     public class AsyncLogger : IDisposable
     {
-        private readonly BlockingCollection<(double T, int V1, double V2, double V3)> _queue;
+        private readonly BlockingCollection<(long T, int V1, double V2, int V3)> _queue;
         private readonly StreamWriter _writer;
         private readonly Task _worker;
         private readonly Stopwatch _sw;
@@ -22,24 +23,23 @@ namespace Stabilization
             _filePath = Path.Combine(dataName, $"{dataName}_{timestamp}.log");
             _writer = new StreamWriter(new FileStream(_filePath, FileMode.Create, FileAccess.Write, FileShare.Read))
             { AutoFlush = true };
-
-            _queue = new BlockingCollection<(double, int, double, double)>();
+            _queue = new BlockingCollection<(long, int, double, int)>();
             _sw = Stopwatch.StartNew();
 
             _worker = Task.Run(() =>
             {
                 foreach (var item in _queue.GetConsumingEnumerable())
-                    _writer.WriteLine($"{item.T:F5};{item.V1};{item.V2:R};{item.V3:R}");
+                    _writer.WriteLine($"{item.T};{item.V1};{item.V2.ToString("F2", CultureInfo.InvariantCulture)};{item.V3}");
             });
         }
 
         // الآن نحسب الزمن داخلية لا يمرر من الخارج
-        public void Record(int value1, double value2, double value3)
+        public void Record(int setpoint, double angle, int output,long milis)
         {
             if (!_queue.IsAddingCompleted)
             {
-                double t = _sw.Elapsed.TotalSeconds;
-                _queue.Add((t, value1, value2, value3));
+                double milis2 = _sw.Elapsed.TotalSeconds;
+                _queue.Add((milis, setpoint, angle, output));
             }
         }
 

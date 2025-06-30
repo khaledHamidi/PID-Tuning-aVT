@@ -5,7 +5,6 @@ using System.Drawing;
 using System.Globalization;
 using System.IO.Ports;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -55,12 +54,14 @@ namespace Stabilization
         public struct SerialDataPoint
         {
             public double Angle;
-            public double Output;
+            public int Output;
             public DateTime Timestamp;
             public long SequenceNumber;
+            public long Millis;      // Arduino timestamp in milliseconds
 
-            public SerialDataPoint(double angle, double output, long sequenceNumber = 0)
+            public SerialDataPoint(long millis, double angle, int output, long sequenceNumber = 0)
             {
+                Millis = millis;
                 Angle = angle;
                 Output = output;
                 Timestamp = DateTime.Now;
@@ -99,8 +100,8 @@ namespace Stabilization
             this.StartPosition = FormStartPosition.Manual;
             // calculat postion to be all window of right and down.
             // get this width and hiens to calculation postion.
-            this.Location = new Point(Screen.PrimaryScreen.Bounds.Width - this.Width, Screen.PrimaryScreen.Bounds.Height - this.Height);
-            this.Location = new Point(627, 202);
+            this.Location = new Point(Screen.PrimaryScreen.Bounds.Width - this.Width, Screen.PrimaryScreen.Bounds.Height - this.Height - 30);
+            //is.Location = new Point(627, 202);
             // Load settings (your existing code)
             mtbPortname.Text = Properties.Settings.Default.PortName;
             cmBuadrite.Text = Properties.Settings.Default.BaudRate.ToString();
@@ -112,6 +113,10 @@ namespace Stabilization
             nudKpd.Value = Properties.Settings.Default.Kpd;
             nudKid.Value = Properties.Settings.Default.Kid;
             nudKdd.Value = Properties.Settings.Default.Kdd;
+            nudBaseSpeed.Value = Properties.Settings.Default.PWMbase;
+            nudLimit.Value = Properties.Settings.Default.PIDOut;
+            loger_name.Text = Properties.Settings.Default.loggerName;
+
 
             // Clear the graph
             plot.chart1.Series["Series1"].Points.Clear();
@@ -163,10 +168,10 @@ namespace Stabilization
                     btconnect.Enabled = false;
                     btdisconnect.Enabled = true;
                     pictureBox1.BackColor = Color.Green;
-
+                    pictureBox7.Hide();
                     // Start real-time processing
                     _plotTimer.Start();
-
+                    pb_ok.BringToFront();
                     AppendToErrorLog($"Connected to Arduino on port {mtbPortname.Text} at {cmBuadrite.Text} baud");
                 }
                 else
@@ -174,10 +179,13 @@ namespace Stabilization
                     pictureBox1.BackColor = Color.Red;
                     MessageBox.Show("Failed to connect to Arduino", "Connection Error",
                                   MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    pb_notconnect.BringToFront();
                 }
             }
             catch (Exception ex)
             {
+                pb_notconnect.BringToFront();
+
                 MessageBox.Show($"Connection Error: {ex.Message}", "Error",
                               MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -187,7 +195,7 @@ namespace Stabilization
         {
             try
             {
-                if (arduino?.IsOpen == true)
+                if (arduino?.IsOpen == true || btconnect.Enabled)
                 {
                     // Stop processing
                     _plotTimer.Stop();
@@ -205,22 +213,25 @@ namespace Stabilization
                     pictureBox1.BackColor = Color.Gray;
                     btconnect.Enabled = true;
                     btdisconnect.Enabled = false;
-
+                    pictureBox7.Show();
                     // Restart cancellation tokens for next connection
                     _processingCancellation = new CancellationTokenSource();
                     _plottingCancellation = new CancellationTokenSource();
                     StartDataProcessingTask();
                     StartCommandProcessingTask();
-
+                    pb_notconnect.BringToFront();
                     //  MessageBox.Show("Disconnected from Arduino", "Connection Status",
                     //           MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
             catch (Exception ex)
             {
+                pb_wrong.BringToFront();
+
                 MessageBox.Show($"Disconnection Error: {ex.Message}", "Error",
                               MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+
         }
 
         #endregion
@@ -285,6 +296,7 @@ namespace Stabilization
             }
         }
 
+        // 2. Update the TryParseDataPoint method
         private bool TryParseDataPoint(string data, out SerialDataPoint dataPoint)
         {
             dataPoint = default;
@@ -294,9 +306,7 @@ namespace Stabilization
                 // Clean the data - remove any non-printable characters
                 data = data.Trim('\r', '\n', ' ', '\t');
 
-
-                // code for get status and save show it in message box,
-
+                // Handle status reading (existing code remains the same)
                 if (READ_PARAMS)
                 {
                     if (data == "STATUS_START")
@@ -323,7 +333,6 @@ namespace Stabilization
                                 setpoint = (int)(_currentParams.ContainsKey("setpoint") ? _currentParams["setpoint"] : 0)
                             };
 
-                            // Show parameters in message box or update UI
                             ShowPIDParameters(pidParams);
                         }
                         return false;
@@ -347,54 +356,42 @@ namespace Stabilization
                     }
                 }
 
-
-
                 // Skip empty lines or obvious non-data lines
                 if (string.IsNullOrEmpty(data) || data.Length < 3) return false;
-
 
                 if (data.StartsWith(">>"))
                 {
                     // this is info so write it into rtbInfoData
                     BeginInvoke(new Action(() => rtbInfoData.AppendText($"{data}{Environment.NewLine}")));
                     BeginInvoke(new Action(() => rtbRawData.ScrollToCaret()));
-
-
                     return false;
                 }
 
-
-                /*      // Skip lines that look like echo commands or status messages
-                      if (data.Contains("target:") || data.Contains("Kp:") || data.Contains("Ki:") ||
-                          data.Contains("Kd:") || data.Contains("save:") || data.Contains("reset:"))
-                      {
-                          return false;
-                      }
-                */
-
+                // NEW: Parse three-value format "millis():Angle:output"
                 var parts = data.Split(':');
-                if (parts.Length != 2)
+                if (parts.Length != 3)  // Changed from 2 to 3
                 {
-                    // Try comma separator as fallback
+                    // Try comma separator as fallback for three values
                     parts = data.Split(',');
-                    if (parts.Length != 2) return false;
+                    if (parts.Length != 3) return false;  // Changed from 2 to 3
                 }
 
-                // Use invariant culture for parsing to handle decimal separators
-                if (double.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float,
-                                  System.Globalization.CultureInfo.InvariantCulture, out double angle) &&
+                // Parse all three values using invariant culture
+                if (long.TryParse(parts[0].Trim(), out long millis) &&  // Parse millis as long
                     double.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float,
-                                  System.Globalization.CultureInfo.InvariantCulture, out double output))
+                                  System.Globalization.CultureInfo.InvariantCulture, out double angle) &&
+                    int.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Integer,
+                                  System.Globalization.CultureInfo.InvariantCulture, out int output))
                 {
                     // Validate ranges to catch obviously wrong data
                     if (Math.Abs(angle) > 90 || Math.Abs(output) > 2000)
                     {
                         if (!cbDisableLogs.Checked)
-                            Task.Run(() => AppendToErrorLog($"Data out of range - Angle: {angle}, Output: {output}"));
+                            Task.Run(() => AppendToErrorLog($"out of range - Millis: {millis}, Angle: {angle}, Output: {output}"));
                         return false;
                     }
 
-                    dataPoint = new SerialDataPoint(angle, output, _dataPointsReceived);
+                    dataPoint = new SerialDataPoint(millis, angle, output, _dataPointsReceived);
                     return true;
                 }
 
@@ -404,10 +401,15 @@ namespace Stabilization
             {
                 if (!cbDisableLogs.Checked)
                     Task.Run(() => AppendToErrorLog($"Parse error for '{data}': {ex.Message}"));
+                Task.Run(() => pb_wrong.BringToFront());
+
+
+
+
                 return false;
             }
         }
-
+        // 3. Update the UpdateRawDataDisplay method call in StartDataProcessingTask
         private void StartDataProcessingTask()
         {
             Task.Run(async () =>
@@ -422,7 +424,8 @@ namespace Stabilization
                             // Update raw data display (throttled)
                             if (_dataPointsReceived % 10 == 0) // Update every 10th data point
                             {
-                                var displayText = $"{dataPoint.Angle:F2}:{dataPoint.Output:F2}";
+                                // Updated to include millis in display
+                                var displayText = $"{dataPoint.Millis}:{dataPoint.Angle:F2}:{dataPoint.Output:F2}";
                                 BeginInvoke(new Action(() => UpdateRawDataDisplay(displayText)));
                             }
                         }
@@ -436,11 +439,13 @@ namespace Stabilization
                     }
                     catch (Exception ex)
                     {
+                        pb_wrong.BringToFront();
                         AppendToErrorLog($"Data processing error: {ex.Message}");
                     }
                 }
             }, _processingCancellation.Token);
         }
+
 
         #endregion
 
@@ -472,9 +477,11 @@ namespace Stabilization
             }
             catch (Exception ex)
             {
+                pb_wrong.BringToFront();
                 AppendToErrorLog($"Plotting error: {ex.Message}");
             }
         }
+        // 4. Update the UpdatePlotWithNewData method debug logging
         /// <summary>
         ///  ploting...
         /// </summary>
@@ -491,19 +498,10 @@ namespace Stabilization
 
                 foreach (var point in newPoints)
                 {
-
-
-
-                    // Debug: Log some values periodically
+                    // Debug: Log some values periodically (updated to include millis)
                     if (_dataPointsReceived % 200 == 0)
                     {
-                        AppendToErrorLog($"Plotting - Angle: {point.Angle:F2}, Output: {point.Output:F2}");
-
-                        if (_dataPointsReceived % 200 == 0)
-                        {
-                            AppendToErrorLog($"Plotting - Angle: {point.Angle:F2}, Output: {point.Output:F2}");
-
-                        }
+                        AppendToErrorLog($"Plotting - Millis: {point.Millis}, Angle: {point.Angle:F2}, Output: {point.Output:F2}");
                     }
 
                     // Maintain rolling window
@@ -516,7 +514,12 @@ namespace Stabilization
 
                     // Add angle point (raw value)
                     seriesAngle.Points.AddY(point.Angle);
-                    plot.label1.Text = point.Angle.ToString();
+                    plot.label1.Text = point.Angle.ToString("F2", CultureInfo.InvariantCulture);
+                    plot.label3.Text = Setpoint.ToString();
+
+                    plot.label2.Text = point.Output.ToString("D4");
+                    plot.label7.Text = point.Millis.ToString();
+
                     // Scale output appropriately - adjust this based on your Arduino output range
                     double scaledOutput;
 
@@ -525,12 +528,9 @@ namespace Stabilization
 
                     seriesOutput.Points.AddY(scaledOutput);
                     seriesTarget.Points.AddY(Setpoint);
-                    plot.label2.Text = scaledOutput.ToString();
-                    plot.label3.Text = Setpoint.ToString();
 
-
-                    logger?.Record((int)Setpoint, point.Angle, point.Output);
-
+                    // Update logger to include millis if needed
+                    logger?.Record((int)Setpoint, point.Angle, point.Output, point.Millis);
                 }
 
                 // Efficient chart update
@@ -605,6 +605,7 @@ namespace Stabilization
             {
                 SendCommandAsync(tbSend.Text);
                 tbSend.Clear();
+                pb_working.BringToFront();
             }
         }
 
@@ -628,6 +629,8 @@ namespace Stabilization
                 string command = $"{tag}:{num.Value.ToString(CultureInfo.InvariantCulture)}";
                 SendCommandAsync(command);
                 BlinkButton(button2, false);
+                pb_working.BringToFront();
+
             }
         }
 
@@ -636,6 +639,8 @@ namespace Stabilization
         {
             SendCommandAsync("save");
             BlinkButton(button2, false);
+            pb_working.BringToFront();
+
         }
 
         private void button3_Click(object sender, EventArgs e)
@@ -649,10 +654,15 @@ namespace Stabilization
                 Properties.Settings.Default.Kpd = (int)nudKpd.Value;
                 Properties.Settings.Default.Kid = (int)nudKid.Value;
                 Properties.Settings.Default.Kdd = (int)nudKdd.Value;
+                Properties.Settings.Default.PWMbase = (int)nudBaseSpeed.Value;
+                Properties.Settings.Default.PIDOut = (int)nudLimit.Value;
+
                 Properties.Settings.Default.Save();
 
                 AppendToErrorLog("PID values saved successfully.");
                 BlinkButton(button2, false);
+                pb_ok.BringToFront();
+
             }
             catch (Exception ex)
             {
@@ -684,11 +694,11 @@ namespace Stabilization
                 BeginInvoke(new Action(() => AppendToErrorLog(message)));
                 return;
             }
-                    rtbErrors.AppendText($"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
-                    rtbErrors.SelectionStart = rtbErrors.Text.Length;
-                    rtbErrors.ScrollToCaret();
+            rtbErrors.AppendText($"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
+            rtbErrors.SelectionStart = rtbErrors.Text.Length;
+            rtbErrors.ScrollToCaret();
         }
-      
+
         private void UpdatePerformanceDisplay()
         {
             var now = DateTime.Now;
@@ -762,6 +772,7 @@ namespace Stabilization
         {
             SendCommandAsync("stop");
             SendCommand("stop");
+            pb_wrong.BringToFront();
         }
         bool READ_PARAMS = false;
         private void ReadParams_fun(object sender, EventArgs e)
@@ -778,7 +789,7 @@ namespace Stabilization
             SendCommandAsync(monitorMode.Checked ? "monitor:on" : "monitor:off");
         }
 
-        
+
         private void ShowPIDParameters(PIDParameters pidParams)
         {
             // Kp
@@ -839,6 +850,8 @@ namespace Stabilization
         private void button7_Click(object sender, EventArgs e)
         {
             SendCommandAsync("reset");
+            pb_working.BringToFront();
+
         }
 
         private void numericUpDown1_ValueChanged(object sender, EventArgs e)
@@ -856,9 +869,9 @@ namespace Stabilization
             SendCommandAsync($"baseSpeed:{Convert.ToInt16(nudBaseSpeed.Value)}");
 
         }
-  
-        
-        
+
+
+
         #region logger
         private AsyncLogger logger;
         private int timestep;
@@ -879,7 +892,10 @@ namespace Stabilization
                         log_usable.Enabled = true;
                         log_unusable.Enabled = true;
                         log_start.Enabled = false;
+                        pb_ok.BringToFront();
                         _logStartTime = null;
+                        Properties.Settings.Default.loggerName = loger_name.Text;
+                        Properties.Settings.Default.Save();
                         return;
                     }
                 case "accept":
@@ -909,5 +925,15 @@ namespace Stabilization
 
 
         #endregion
+
+        private void panel2_Paint(object sender, PaintEventArgs e)
+        {
+
+        }
+
+        private void linkLabel1_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        {
+            info_panel.Visible = !info_panel.Visible;
+        }
     }
 }

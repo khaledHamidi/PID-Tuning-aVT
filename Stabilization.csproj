@@ -88,6 +88,7 @@
     <Compile Include="Properties\Resources.Designer.cs">
       <AutoGen>True</AutoGen>
       <DependentUpon>Resources.resx</DependentUpon>
+      <DesignTime>True</DesignTime>
     </Compile>
     <None Include="packages.config" />
     <None Include="Properties\Settings.settings">
@@ -103,6 +104,48 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\connected.gif" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\done.gif" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\emergency.gif" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\emergency-stop.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\log.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\serial.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\unchecked.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\filter.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\unlink.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\setting.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\tuning.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\check.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\target.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="files\load.gif" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

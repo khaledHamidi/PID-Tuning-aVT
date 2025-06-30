@@ -11,10 +11,8 @@ namespace Stabilization
             // start postion 0,0
             this.StartPosition = FormStartPosition.Manual;
             // this size is the same to screen hieght and width/2
-            this.Size = new Size(Screen.PrimaryScreen.Bounds.Width / 2, Screen.PrimaryScreen.Bounds.Height);
-            // beng to front not topmost.
-            this.Width = 635;
-            this.Height = 768;
+            this.Size = new Size(Screen.PrimaryScreen.Bounds.Width / 2, Screen.PrimaryScreen.Bounds.Height-30);
+
             this.Location = new Point(0, 0);
 
 

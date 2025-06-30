@@ -50,6 +50,7 @@
             this.label4 = new System.Windows.Forms.Label();
             this.label5 = new System.Windows.Forms.Label();
             this.label6 = new System.Windows.Forms.Label();
+            this.label7 = new System.Windows.Forms.Label();
             ((System.ComponentModel.ISupportInitialize)(this.chart1)).BeginInit();
             this.SuspendLayout();
             // 
@@ -102,81 +103,99 @@
             this.chart1.Series.Add(series7);
             this.chart1.Series.Add(series8);
             this.chart1.Series.Add(series9);
-            this.chart1.Size = new System.Drawing.Size(676, 463);
+            this.chart1.Size = new System.Drawing.Size(597, 487);
             this.chart1.TabIndex = 15;
             this.chart1.Text = "chart1";
             // 
             // label1
             // 
-            this.label1.AutoSize = true;
-            this.label1.Font = new System.Drawing.Font("Tahoma", 20.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label1.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.label1.Font = new System.Drawing.Font("Tahoma", 14F);
             this.label1.ForeColor = System.Drawing.Color.Blue;
-            this.label1.Location = new System.Drawing.Point(166, 413);
+            this.label1.Location = new System.Drawing.Point(106, 449);
             this.label1.Name = "label1";
-            this.label1.Size = new System.Drawing.Size(45, 33);
+            this.label1.Size = new System.Drawing.Size(76, 27);
             this.label1.TabIndex = 16;
             this.label1.Text = "60";
+            this.label1.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
             // 
             // label2
             // 
-            this.label2.AutoSize = true;
-            this.label2.Font = new System.Drawing.Font("Tahoma", 20.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label2.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.label2.Font = new System.Drawing.Font("Tahoma", 14F);
             this.label2.ForeColor = System.Drawing.Color.Green;
-            this.label2.Location = new System.Drawing.Point(530, 413);
+            this.label2.Location = new System.Drawing.Point(307, 449);
             this.label2.Name = "label2";
-            this.label2.Size = new System.Drawing.Size(75, 33);
+            this.label2.Size = new System.Drawing.Size(146, 27);
             this.label2.TabIndex = 17;
             this.label2.Text = "1200";
+            this.label2.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // label3
             // 
-            this.label3.AutoSize = true;
-            this.label3.Font = new System.Drawing.Font("Tahoma", 20.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label3.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.label3.Font = new System.Drawing.Font("Tahoma", 14F);
             this.label3.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(128)))), ((int)(((byte)(128)))), ((int)(((byte)(255)))));
-            this.label3.Location = new System.Drawing.Point(293, 413);
+            this.label3.Location = new System.Drawing.Point(201, 449);
             this.label3.Name = "label3";
-            this.label3.Size = new System.Drawing.Size(30, 33);
+            this.label3.Size = new System.Drawing.Size(72, 27);
             this.label3.TabIndex = 18;
             this.label3.Text = "0";
+            this.label3.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
             // label4
             // 
-            this.label4.AutoSize = true;
-            this.label4.Font = new System.Drawing.Font("Tahoma", 20.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label4.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.label4.Font = new System.Drawing.Font("Tahoma", 14F);
             this.label4.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(128)))), ((int)(((byte)(128)))), ((int)(((byte)(255)))));
-            this.label4.Location = new System.Drawing.Point(249, 413);
+            this.label4.Location = new System.Drawing.Point(182, 449);
             this.label4.Name = "label4";
-            this.label4.Size = new System.Drawing.Size(25, 33);
+            this.label4.Size = new System.Drawing.Size(20, 27);
             this.label4.TabIndex = 19;
             this.label4.Text = "/";
             // 
             // label5
             // 
+            this.label5.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
             this.label5.AutoSize = true;
-            this.label5.Font = new System.Drawing.Font("Tahoma", 20.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label5.Font = new System.Drawing.Font("Tahoma", 14F);
             this.label5.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(64)))), ((int)(((byte)(64)))));
-            this.label5.Location = new System.Drawing.Point(365, 413);
+            this.label5.Location = new System.Drawing.Point(326, 424);
             this.label5.Name = "label5";
-            this.label5.Size = new System.Drawing.Size(149, 33);
+            this.label5.Size = new System.Drawing.Size(104, 23);
             this.label5.TabIndex = 20;
             this.label5.Text = "PWM (M1):";
             // 
             // label6
             // 
+            this.label6.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
             this.label6.AutoSize = true;
-            this.label6.Font = new System.Drawing.Font("Tahoma", 20.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label6.Font = new System.Drawing.Font("Tahoma", 14F);
             this.label6.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(64)))), ((int)(((byte)(64)))));
-            this.label6.Location = new System.Drawing.Point(43, 413);
+            this.label6.Location = new System.Drawing.Point(154, 427);
             this.label6.Name = "label6";
-            this.label6.Size = new System.Drawing.Size(105, 33);
+            this.label6.Size = new System.Drawing.Size(74, 23);
             this.label6.TabIndex = 21;
             this.label6.Text = "ANGLE:";
+            // 
+            // label7
+            // 
+            this.label7.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.label7.Font = new System.Drawing.Font("Tahoma", 10F);
+            this.label7.ForeColor = System.Drawing.Color.BurlyWood;
+            this.label7.Location = new System.Drawing.Point(475, 424);
+            this.label7.Name = "label7";
+            this.label7.Size = new System.Drawing.Size(98, 19);
+            this.label7.TabIndex = 22;
+            this.label7.Text = "00.0000";
+            this.label7.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // Plot
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(676, 463);
+            this.ClientSize = new System.Drawing.Size(597, 487);
+            this.Controls.Add(this.label7);
             this.Controls.Add(this.label6);
             this.Controls.Add(this.label5);
             this.Controls.Add(this.label4);
@@ -204,5 +223,6 @@
         public System.Windows.Forms.Label label4;
         public System.Windows.Forms.Label label5;
         public System.Windows.Forms.Label label6;
+        public System.Windows.Forms.Label label7;
     }
 }

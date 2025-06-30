@@ -99,6 +99,7 @@
       <DependentUpon>Settings.settings</DependentUpon>
       <DesignTimeSharedInput>True</DesignTimeSharedInput>
     </Compile>
+    <None Include="stabilizer\stabilizer.ino" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

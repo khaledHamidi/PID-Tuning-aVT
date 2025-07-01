@@ -137,103 +137,66 @@ namespace Stabilization
         #endregion
 
         #region Connection Management
-
-        private void btconnect_Click(object sender, EventArgs e)
+        // 1. تحسين معالجة البيانات الواردة
+        private void Arduino_DataReceived(object sender, SerialDataReceivedEventArgs e)
         {
             try
             {
-                arduino.PortName = mtbPortname.Text;
-                arduino.BaudRate = Convert.ToInt32(cmBuadrite.Text);
+                if (!arduino.IsOpen) return; // تحقق من حالة الاتصال
 
-                // Configure serial port for optimal performance
-                arduino.ReadBufferSize = 8192; // Larger buffer
-                arduino.WriteBufferSize = 2048;
-                arduino.ReadTimeout = 100;
-                arduino.WriteTimeout = 100;
-                arduino.NewLine = "\n";
+                string newData = arduino.ReadExisting();
+                if (string.IsNullOrEmpty(newData)) return;
 
-                arduino.DataReceived += Arduino_DataReceived;
-                arduino.ErrorReceived += Arduino_ErrorReceived;
-
-                arduino.Open();
-
-                if (arduino.IsOpen)
+                lock (_bufferLock)
                 {
-                    // Save settings
-                    Properties.Settings.Default.PortName = mtbPortname.Text;
-                    Properties.Settings.Default.BaudRate = Convert.ToInt32(cmBuadrite.Text);
-                    Properties.Settings.Default.Save();
+                    _serialBuffer += newData;
 
-                    // Update UI
-                    btconnect.Enabled = false;
-                    btdisconnect.Enabled = true;
-                    pictureBox1.BackColor = Color.Green;
-                    pictureBox7.Hide();
-                    // Start real-time processing
-                    _plotTimer.Start();
-                    pb_ok.BringToFront();
-                    AppendToErrorLog($"Connected to Arduino on port {mtbPortname.Text} at {cmBuadrite.Text} baud");
-                }
-                else
-                {
-                    pictureBox1.BackColor = Color.Red;
-                    MessageBox.Show("Failed to connect to Arduino", "Connection Error",
-                                  MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    pb_notconnect.BringToFront();
+                    // معالجة جميع الأسطر المكتملة
+                    string[] lines = _serialBuffer.Split('\n');
+
+                    // الاحتفاظ بآخر سطر غير مكتمل
+                    _serialBuffer = lines[lines.Length - 1];
+
+                    // معالجة جميع الأسطر المكتملة
+                    for (int i = 0; i < lines.Length - 1; i++)
+                    {
+                        string completeLine = lines[i].Trim('\r', '\n', ' ', '\t');
+
+                        if (string.IsNullOrEmpty(completeLine)) continue;
+
+                        // تسجيل البيانات الخام للتشخيص
+                        if (_dataPointsReceived % 50 == 0 && !cbDisableLogs.Checked)
+                        {
+                            Task.Run(() => AppendToErrorLog($"Raw data: '{completeLine}'"));
+                        }
+
+                        // تحليل ووضع البيانات في الطابور
+                        if (TryParseDataPoint(completeLine, out SerialDataPoint dataPoint))
+                        {
+                            _dataQueue.Enqueue(dataPoint);
+                            Interlocked.Increment(ref _dataPointsReceived);
+
+                            // تعيين علامة توفر بيانات جديدة
+                            lock (_dataLock)
+                            {
+                                _newDataAvailable = true;
+                            }
+                        }
+                        else if (!cbDisableLogs.Checked)
+                        {
+                            BeginInvoke(new Action(() =>
+                                rtbError.AppendText($"Parse failed: '{completeLine}'{Environment.NewLine}")
+                            ));
+                        }
+                    }
                 }
             }
             catch (Exception ex)
             {
-                pb_notconnect.BringToFront();
-
-                MessageBox.Show($"Connection Error: {ex.Message}", "Error",
-                              MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (!cbDisableLogs.Checked)
+                    Task.Run(() => AppendToErrorLog($"Data receive error: {ex.Message}"));
             }
         }
-
-        private void btdisconnect_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                if (arduino?.IsOpen == true || btconnect.Enabled)
-                {
-                    // Stop processing
-                    _plotTimer.Stop();
-                    _processingCancellation.Cancel();
-                    _plottingCancellation.Cancel();
-
-                    // Cleanup serial port
-                    arduino.DataReceived -= Arduino_DataReceived;
-                    arduino.ErrorReceived -= Arduino_ErrorReceived;
-                    arduino.DiscardInBuffer();
-                    arduino.DiscardOutBuffer();
-                    arduino.Close();
-
-                    // Update UI
-                    pictureBox1.BackColor = Color.Gray;
-                    btconnect.Enabled = true;
-                    btdisconnect.Enabled = false;
-                    pictureBox7.Show();
-                    // Restart cancellation tokens for next connection
-                    _processingCancellation = new CancellationTokenSource();
-                    _plottingCancellation = new CancellationTokenSource();
-                    StartDataProcessingTask();
-                    StartCommandProcessingTask();
-                    pb_notconnect.BringToFront();
-                    //  MessageBox.Show("Disconnected from Arduino", "Connection Status",
-                    //           MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-            }
-            catch (Exception ex)
-            {
-                pb_wrong.BringToFront();
-
-                MessageBox.Show($"Disconnection Error: {ex.Message}", "Error",
-                              MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-
-        }
-
         #endregion
 
         #region High-Performance Data Processing
@@ -242,71 +205,21 @@ namespace Stabilization
         private string _serialBuffer = "";
         private readonly object _bufferLock = new object();
 
-        private void Arduino_DataReceived(object sender, SerialDataReceivedEventArgs e)
-        {
-            try
-            {
-                string newData = arduino.ReadExisting();
-                // here check if monitor modeoff 
 
-                if (string.IsNullOrEmpty(newData)) return;
-
-                lock (_bufferLock)
-                {
-                    // Append new data to buffer
-                    _serialBuffer += newData;
-
-                    // Process complete lines
-                    while (_serialBuffer.Contains('\n'))
-                    {
-                        int lineEnd = _serialBuffer.IndexOf('\n');
-                        string completeLine = _serialBuffer.Substring(0, lineEnd).Trim();
-                        _serialBuffer = _serialBuffer.Substring(lineEnd + 1);
-
-                        if (string.IsNullOrEmpty(completeLine)) continue;
-
-                        // Debug: Log raw data for troubleshooting
-                        if (_dataPointsReceived % 100 == 0) // Log every 100th line
-                        {
-                            if (!cbDisableLogs.Checked)
-                                Task.Run(() => AppendToErrorLog($"data: '{completeLine}'"));
-                        }
-
-                        // Parse and enqueue data
-                        if (TryParseDataPoint(completeLine, out SerialDataPoint dataPoint))
-                        {
-                            _dataQueue.Enqueue(dataPoint);
-                            Interlocked.Increment(ref _dataPointsReceived);
-                            _newDataAvailable = true;
-                        }
-                        else
-                        {
-                            if (cbDisableLogs.Checked) return; // Skip logging if disabled
-
-                            BeginInvoke(new Action(() => rtbError.AppendText(($"Failed to parse: '{completeLine + Environment.NewLine}'"))));
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                if (cbDisableLogs.Checked) return; // Skip logging if disabled
-
-                Task.Run(() => AppendToErrorLog($"Data receive error: {ex.Message}"));
-            }
-        }
-
-        // 2. Update the TryParseDataPoint method
+        // 2. تحسين تحليل البيانات
         private bool TryParseDataPoint(string data, out SerialDataPoint dataPoint)
         {
             dataPoint = default;
 
             try
             {
-                // Clean the data - remove any non-printable characters
+                // تنظيف البيانات
                 data = data.Trim('\r', '\n', ' ', '\t');
 
-                // Handle status reading (existing code remains the same)
+                if (string.IsNullOrEmpty(data) || data.Length < 3)
+                    return false;
+
+                // معالجة حالة قراءة المعاملات (STATUS)
                 if (READ_PARAMS)
                 {
                     if (data == "STATUS_START")
@@ -319,76 +232,53 @@ namespace Stabilization
                     {
                         _readingStatus = false;
                         READ_PARAMS = false;
-
-                        // Process collected parameters
-                        if (_currentParams.Count >= 4)
-                        {
-                            var pidParams = new PIDParameters
-                            {
-                                Kp = _currentParams.ContainsKey("Kp") ? _currentParams["Kp"] : 0,
-                                Ki = _currentParams.ContainsKey("Ki") ? _currentParams["Ki"] : 0,
-                                Kd = _currentParams.ContainsKey("Kd") ? _currentParams["Kd"] : 0,
-                                limit = (int)(_currentParams.ContainsKey("limit") ? _currentParams["limit"] : 0),
-                                baseSpeed = (int)(_currentParams.ContainsKey("baseSpeed") ? _currentParams["baseSpeed"] : 1000),
-                                setpoint = (int)(_currentParams.ContainsKey("setpoint") ? _currentParams["setpoint"] : 0)
-                            };
-
-                            ShowPIDParameters(pidParams);
-                        }
+                        ProcessStatusParameters();
                         return false;
                     }
                     else if (_readingStatus && data.Contains(":"))
                     {
-                        // Parse parameter line
-                        var partss = data.Split(':');
-                        if (partss.Length == 2)
-                        {
-                            string paramName = partss[0].Trim();
-                            if (double.TryParse(partss[1].Trim(),
-                                              System.Globalization.NumberStyles.Float,
-                                              System.Globalization.CultureInfo.InvariantCulture,
-                                              out double value))
-                            {
-                                _currentParams[paramName] = value;
-                            }
-                        }
+                        ParseStatusParameter(data);
                         return false;
                     }
                 }
 
-                // Skip empty lines or obvious non-data lines
-                if (string.IsNullOrEmpty(data) || data.Length < 3) return false;
-
+                // تخطي الرسائل المعلوماتية
                 if (data.StartsWith(">>"))
                 {
-                    // this is info so write it into rtbInfoData
-                    BeginInvoke(new Action(() => rtbInfoData.AppendText($"{data}{Environment.NewLine}")));
-                    BeginInvoke(new Action(() => rtbRawData.ScrollToCaret()));
+                    BeginInvoke(new Action(() =>
+                    {
+                        rtbInfoData.AppendText($"{data}{Environment.NewLine}");
+                        rtbInfoData.ScrollToCaret();
+                    }));
+                    Show(pb_ok);
                     return false;
                 }
 
-                // NEW: Parse three-value format "millis():Angle:output"
+                // تحليل البيانات بصيغة "millis:angle:output"
                 var parts = data.Split(':');
-                if (parts.Length != 3)  // Changed from 2 to 3
+                if (parts.Length != 3)
                 {
-                    // Try comma separator as fallback for three values
+                    // المحاولة بالفاصلة كبديل
                     parts = data.Split(',');
-                    if (parts.Length != 3) return false;  // Changed from 2 to 3
+                    if (parts.Length != 3)
+                        return false;
                 }
 
-                // Parse all three values using invariant culture
-                if (long.TryParse(parts[0].Trim(), out long millis) &&  // Parse millis as long
-                    double.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float,
-                                  System.Globalization.CultureInfo.InvariantCulture, out double angle) &&
-                    int.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Integer,
-                                  System.Globalization.CultureInfo.InvariantCulture, out int output))
+                // تحليل القيم الثلاث
+                if (long.TryParse(parts[0].Trim(), out long millis) &&
+                    double.TryParse(parts[1].Trim(),
+                                  NumberStyles.Float,
+                                  CultureInfo.InvariantCulture, out double angle) &&
+                    int.TryParse(parts[2].Trim(),
+                                NumberStyles.Integer,
+                                CultureInfo.InvariantCulture, out int output))
                 {
-                    // Validate ranges to catch obviously wrong data
-                    if (Math.Abs(angle) > 90 || Math.Abs(output) > 2000)
+                    // التحقق من صحة النطاقات (تحذير فقط، لا رفض)
+                    if (Math.Abs(angle) > 180 || Math.Abs(output) > 5000)
                     {
                         if (!cbDisableLogs.Checked)
-                            Task.Run(() => AppendToErrorLog($"out of range - Millis: {millis}, Angle: {angle}, Output: {output}"));
-                        return false;
+                            Task.Run(() => AppendToErrorLog(
+                                $"Unusual values - Millis: {millis}, Angle: {angle:F2}, Output: {output}"));
                     }
 
                     dataPoint = new SerialDataPoint(millis, angle, output, _dataPointsReceived);
@@ -400,38 +290,49 @@ namespace Stabilization
             catch (Exception ex)
             {
                 if (!cbDisableLogs.Checked)
-                    Task.Run(() => AppendToErrorLog($"Parse error for '{data}': {ex.Message}"));
-                Task.Run(() => pb_wrong.BringToFront());
-
-
-
-
+                    Task.Run(() => AppendToErrorLog($"Parse exception for '{data}': {ex.Message}"));
                 return false;
             }
         }
-        // 3. Update the UpdateRawDataDisplay method call in StartDataProcessingTask
+        // 3. تحسين معالجة البيانات في المهمة الخلفية
         private void StartDataProcessingTask()
         {
             Task.Run(async () =>
             {
+                var batchPoints = new List<SerialDataPoint>();
+
                 while (!_processingCancellation.Token.IsCancellationRequested)
                 {
                     try
                     {
-                        // Process UI updates in batches for better performance
-                        if (_dataQueue.TryDequeue(out SerialDataPoint dataPoint))
+                        batchPoints.Clear();
+
+                        // جمع دفعة من النقاط لمعالجة أكثر كفاءة
+                        while (_dataQueue.TryDequeue(out SerialDataPoint point) && batchPoints.Count < 20)
                         {
-                            // Update raw data display (throttled)
-                            if (_dataPointsReceived % 10 == 0) // Update every 10th data point
+                            batchPoints.Add(point);
+                        }
+
+                        if (batchPoints.Count > 0)
+                        {
+                            // تحديث عرض البيانات الخام (مخفف)
+                            //if (_dataPointsReceived % 5 != 0)
+                            if(cbDisableLogs.Checked ==false)
                             {
-                                // Updated to include millis in display
-                                var displayText = $"{dataPoint.Millis}:{dataPoint.Angle:F2}:{dataPoint.Output:F2}";
+                                var lastPoint = batchPoints.Last();
+                                var displayText = $"{lastPoint.Millis}:{lastPoint.Angle:F2}:{lastPoint.Output}";
                                 BeginInvoke(new Action(() => UpdateRawDataDisplay(displayText)));
+                            }
+
+                            // تحديث إشارة البيانات الجديدة للرسم
+                            lock (_dataLock)
+                            {
+                                _newDataAvailable = true;
                             }
                         }
 
-                        // Small delay to prevent CPU overload
-                        await Task.Delay(DATA_PROCESSING_DELAY_MS, _processingCancellation.Token);
+                        // تأخير قصير لمنع استهلاك CPU مرتفع
+                        await Task.Delay(1, _processingCancellation.Token);
                     }
                     catch (OperationCanceledException)
                     {
@@ -439,8 +340,9 @@ namespace Stabilization
                     }
                     catch (Exception ex)
                     {
-                        pb_wrong.BringToFront();
+                        Show(pb_wrong);
                         AppendToErrorLog($"Data processing error: {ex.Message}");
+                        await Task.Delay(100); // تأخير أطول عند حدوث خطأ
                     }
                 }
             }, _processingCancellation.Token);
@@ -451,44 +353,60 @@ namespace Stabilization
 
         #region Real-Time Plotting
 
+        // 4. تحسين مؤقت الرسم
         private void PlotTimer_Tick(object sender, EventArgs e)
         {
-            if (!_newDataAvailable || plot?.chart1 == null) return;
+            bool hasNewData;
+            lock (_dataLock)
+            {
+                hasNewData = _newDataAvailable;
+                _newDataAvailable = false; // إعادة تعيين العلامة
+            }
+
+            if (!hasNewData || plot?.chart1 == null)
+                return;
 
             try
             {
-                // Process all queued data points
-                var newPoints = new List<SerialDataPoint>();
-                while (_dataQueue.TryDequeue(out SerialDataPoint point) && newPoints.Count < 50)
+                // معالجة دفعة من النقاط لضمان الأداء السلس
+                var pointsToProcess = new List<SerialDataPoint>();
+                int maxPointsPerUpdate = 10; // تحديد الحد الأقصى لنقاط كل تحديث
+
+                while (_dataQueue.TryDequeue(out SerialDataPoint point) &&
+                       pointsToProcess.Count < maxPointsPerUpdate)
                 {
-                    newPoints.Add(point);
+                    pointsToProcess.Add(point);
                 }
 
-                if (newPoints.Count == 0) return;
+                if (pointsToProcess.Count > 0)
+                {
+                    UpdatePlotWithNewData(pointsToProcess);
 
-                UpdatePlotWithNewData(newPoints);
-                _newDataAvailable = _dataQueue.Count > 0;
+                    // إعادة تعيين العلامة إذا بقيت نقاط في الطابور
+                    lock (_dataLock)
+                    {
+                        _newDataAvailable = _dataQueue.Count > 0;
+                    }
+                }
 
-                // Update performance counter periodically
-                if ((DateTime.Now - _lastPerformanceUpdate).TotalSeconds >= 1.0)
+                // تحديث عداد الأداء
+                if ((DateTime.Now - _lastPerformanceUpdate).TotalSeconds >= 2.0)
                 {
                     UpdatePerformanceDisplay();
                 }
             }
             catch (Exception ex)
             {
-                pb_wrong.BringToFront();
-                AppendToErrorLog($"Plotting error: {ex.Message}");
+                Show(pb_wrong);
+                AppendToErrorLog($"Plot timer error: {ex.Message}");
             }
         }
-        // 4. Update the UpdatePlotWithNewData method debug logging
-        /// <summary>
-        ///  ploting...
-        /// </summary>
-        /// <param name="newPoints"></param>
+
+        // 5. تحسين تحديث الرسم البياني
         private void UpdatePlotWithNewData(List<SerialDataPoint> newPoints)
         {
-            if (plot?.chart1?.Series == null) return;
+            if (plot?.chart1?.Series == null || newPoints.Count == 0)
+                return;
 
             try
             {
@@ -496,15 +414,12 @@ namespace Stabilization
                 var seriesOutput = plot.chart1.Series["out"];
                 var seriesTarget = plot.chart1.Series["target"];
 
+                // تعليق التحديث لتحسين الأداء
+                plot.chart1.SuspendLayout();
+
                 foreach (var point in newPoints)
                 {
-                    // Debug: Log some values periodically (updated to include millis)
-                    if (_dataPointsReceived % 200 == 0)
-                    {
-                        AppendToErrorLog($"Plotting - Millis: {point.Millis}, Angle: {point.Angle:F2}, Output: {point.Output:F2}");
-                    }
-
-                    // Maintain rolling window
+                    // الحفاظ على نافذة متحركة
                     if (seriesAngle.Points.Count >= MAX_PLOT_POINTS)
                     {
                         seriesAngle.Points.RemoveAt(0);
@@ -512,37 +427,60 @@ namespace Stabilization
                         if (seriesTarget.Points.Count > 0) seriesTarget.Points.RemoveAt(0);
                     }
 
-                    // Add angle point (raw value)
+                    // إضافة نقطة الزاوية
                     seriesAngle.Points.AddY(point.Angle);
-                    plot.label1.Text = point.Angle.ToString("F2", CultureInfo.InvariantCulture);
-                    plot.label3.Text = Setpoint.ToString();
 
-                    plot.label2.Text = point.Output.ToString("D4");
+                    // تحديث تسميات العرض
+                    plot.label1.Text = point.Angle.ToString("F2", CultureInfo.InvariantCulture);
+                    plot.label2.Text = point.Output.ToString();
+                    plot.label3.Text = Setpoint.ToString();
                     plot.label7.Text = point.Millis.ToString();
 
-                    // Scale output appropriately - adjust this based on your Arduino output range
-                    double scaledOutput;
+                    // حساب الإخراج المقيس
+                    double scaledOutput = 0;
+                    int baseSpeed = (int)nudBaseSpeed.Value;
+                    int limit = (int)nudLimit.Value;
 
-                    // Convert from range (nudBaseSpeed.Value - nudLimit.Value, nudBaseSpeed.Value + nudLimit.Value) into (-59,59).
-                    scaledOutput = (point.Output - (int)nudBaseSpeed.Value) * 59 / (int)nudLimit.Value;
+                    if (limit > 0)
+                    {
+                        scaledOutput = (point.Output - baseSpeed) * 59.0 / limit;
+                    }
 
                     seriesOutput.Points.AddY(scaledOutput);
                     seriesTarget.Points.AddY(Setpoint);
 
-                    // Update logger to include millis if needed
+                    // تسجيل البيانات
                     logger?.Record((int)Setpoint, point.Angle, point.Output, point.Millis);
                 }
 
-                // Efficient chart update
+                // استئناف التحديث وإعادة رسم واحدة
+                plot.chart1.ResumeLayout();
                 plot.chart1.Invalidate();
+
+                // تسجيل تشخيصي
+                if (_dataPointsReceived % 100 == 0 && !cbDisableLogs.Checked)
+                {
+                    var lastPoint = newPoints.Last();
+                    AppendToErrorLog($"Plotted batch: {newPoints.Count} points, " +
+                                   $"Last: Millis={lastPoint.Millis}, Angle={lastPoint.Angle:F2}");
+                }
             }
             catch (Exception ex)
             {
+                plot.chart1.ResumeLayout(); // تأكد من استئناف التخطيط حتى عند الخطأ
                 AppendToErrorLog($"Plot update error: {ex.Message}");
             }
         }
 
         #endregion
+
+
+
+
+
+
+
+
 
         #region Command Processing
 
@@ -599,13 +537,108 @@ namespace Stabilization
 
         #region UI Event Handlers
 
+
+        private void btconnect_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                arduino.PortName = mtbPortname.Text;
+                arduino.BaudRate = Convert.ToInt32(cmBuadrite.Text);
+
+                // Configure serial port for optimal performance
+                arduino.ReadBufferSize = 8192; // Larger buffer
+                arduino.WriteBufferSize = 2048;
+                arduino.ReadTimeout = 100;
+                arduino.WriteTimeout = 100;
+                arduino.NewLine = "\n";
+
+                arduino.DataReceived += Arduino_DataReceived;
+                arduino.ErrorReceived += Arduino_ErrorReceived;
+
+                arduino.Open();
+
+                if (arduino.IsOpen)
+                {
+                    // Save settings
+                    Properties.Settings.Default.PortName = mtbPortname.Text;
+                    Properties.Settings.Default.BaudRate = Convert.ToInt32(cmBuadrite.Text);
+                    Properties.Settings.Default.Save();
+
+                    // Update UI
+                    btconnect.Enabled = false;
+                    btdisconnect.Enabled = true;
+                    pictureBox7.Hide();
+                    // Start real-time processing
+                    _plotTimer.Start();
+                    Show(pb_ok);
+                    AppendToErrorLog($"Connected to Arduino on port {mtbPortname.Text} at {cmBuadrite.Text} baud");
+                }
+                else
+                {
+                    MessageBox.Show("Failed to connect to Arduino", "Connection Error",
+                                  MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    Show(pb_notconnect);
+                }
+            }
+            catch (Exception ex)
+            {
+                Show(pb_notconnect);
+
+                MessageBox.Show($"Connection Error: {ex.Message}", "Error",
+                              MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btdisconnect_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (arduino?.IsOpen == true || btconnect.Enabled)
+                {
+                    // Stop processing
+                    _plotTimer.Stop();
+                    _processingCancellation.Cancel();
+                    _plottingCancellation.Cancel();
+
+                    // Cleanup serial port
+                    arduino.DataReceived -= Arduino_DataReceived;
+                    arduino.ErrorReceived -= Arduino_ErrorReceived;
+                    arduino.DiscardInBuffer();
+                    arduino.DiscardOutBuffer();
+                    arduino.Close();
+
+                    // Update UI
+                    pictureBox1.Parent = panel4;
+                    btconnect.Enabled = true;
+                    btdisconnect.Enabled = false;
+                    pictureBox7.Show();
+                    // Restart cancellation tokens for next connection
+                    _processingCancellation = new CancellationTokenSource();
+                    _plottingCancellation = new CancellationTokenSource();
+                    StartDataProcessingTask();
+                    StartCommandProcessingTask();
+                    Show(pb_notconnect);
+                    //  MessageBox.Show("Disconnected from Arduino", "Connection Status",
+                    //           MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                Show(pb_wrong);
+
+                MessageBox.Show($"Disconnection Error: {ex.Message}", "Error",
+                              MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+
+        }
+
         private void button1_Click(object sender, EventArgs e)
         {
             if (!string.IsNullOrWhiteSpace(tbSend.Text))
             {
                 SendCommandAsync(tbSend.Text);
                 tbSend.Clear();
-                pb_working.BringToFront();
+                Show(pb_working);
             }
         }
 
@@ -629,7 +662,7 @@ namespace Stabilization
                 string command = $"{tag}:{num.Value.ToString(CultureInfo.InvariantCulture)}";
                 SendCommandAsync(command);
                 BlinkButton(button2, false);
-                pb_working.BringToFront();
+                Show(pb_working);
 
             }
         }
@@ -639,7 +672,7 @@ namespace Stabilization
         {
             SendCommandAsync("save");
             BlinkButton(button2, false);
-            pb_working.BringToFront();
+            Show(pb_working);
 
         }
 
@@ -661,7 +694,7 @@ namespace Stabilization
 
                 AppendToErrorLog("PID values saved successfully.");
                 BlinkButton(button2, false);
-                pb_ok.BringToFront();
+                Show(pb_ok);
 
             }
             catch (Exception ex)
@@ -674,6 +707,71 @@ namespace Stabilization
         #endregion
 
         #region UI Helper Methods
+        // 6. إضافة طرق مساعدة لمعالجة المعاملات
+        private void ProcessStatusParameters()
+        {
+            if (_currentParams.Count >= 4)
+            {
+                var pidParams = new PIDParameters
+                {
+                    Kp = _currentParams.GetValueOrDefault("Kp", 0),
+                    Ki = _currentParams.GetValueOrDefault("Ki", 0),
+                    Kd = _currentParams.GetValueOrDefault("Kd", 0),
+                    limit = (int)_currentParams.GetValueOrDefault("Limit", 0),
+                    baseSpeed = (int)_currentParams.GetValueOrDefault("baseSpeed", 1000),
+                    setpoint = (int)_currentParams.GetValueOrDefault("Target", 0)
+                };
+
+                ShowPIDParameters(pidParams);
+            }
+        }
+
+        private void ParseStatusParameter(string data)
+        {
+            var parts = data.Split(':');
+            if (parts.Length == 2)
+            {
+                string paramName = parts[0].Trim();
+                if (double.TryParse(parts[1].Trim(),
+                                  NumberStyles.Float,
+                                  CultureInfo.InvariantCulture,
+                                  out double value))
+                {
+                    _currentParams[paramName] = value;
+                }
+                else if (int.TryParse(parts[1].Trim(),
+                                  NumberStyles.Float,
+                                  CultureInfo.InvariantCulture,
+                                  out int value2))
+                {
+                    _currentParams[paramName] = value2;
+                }
+            }
+        }
+
+        // 7. تحسين عرض الأداء
+        private void UpdatePerformanceDisplay()
+        {
+            var now = DateTime.Now;
+            var timeDiff = (now - _lastPerformanceUpdate).TotalSeconds;
+
+            if (timeDiff > 0)
+            {
+                double dataRate = _dataPointsReceived / timeDiff;
+                _lastPerformanceUpdate = now;
+
+                int currentDataCount = _dataPointsReceived;
+                _dataPointsReceived = 0; // إعادة تعيين العداد
+
+                BeginInvoke(new Action(() =>
+                {
+                    AppendToErrorLog($"Performance: {dataRate:F1} Hz | " +
+                                   $"Queue: {_dataQueue.Count} | " +
+                                   $"Buffer: {_serialBuffer?.Length ?? 0} | " +
+                                   $"Points: {currentDataCount}");
+                }));
+            }
+        }
 
         private void UpdateRawDataDisplay(string data)
         {
@@ -698,23 +796,14 @@ namespace Stabilization
             rtbErrors.SelectionStart = rtbErrors.Text.Length;
             rtbErrors.ScrollToCaret();
         }
-
-        private void UpdatePerformanceDisplay()
+        private void Show(PictureBox pb)
         {
-            var now = DateTime.Now;
-            var timeDiff = (now - _lastPerformanceUpdate).TotalSeconds;
-            if (timeDiff > 0)
+            if (InvokeRequired)
             {
-                double dataRate = _dataPointsReceived / timeDiff;
-                _lastPerformanceUpdate = now;
-                _dataPointsReceived = 0; // Reset counter
-
-                BeginInvoke(new Action(() =>
-                {
-                    // Add performance info to error log periodically
-                    AppendToErrorLog($"Performance: {dataRate:F1} Hz | Queue: {_dataQueue.Count} | Buffer: {_serialBuffer.Length}");
-                }));
+                BeginInvoke(new Action(() => Show(pb)));
+                return;
             }
+            pb.BringToFront();
         }
 
         private async void BlinkButton(Button button, bool isError)
@@ -772,7 +861,7 @@ namespace Stabilization
         {
             SendCommandAsync("stop");
             SendCommand("stop");
-            pb_wrong.BringToFront();
+            Show(pb_wrong);
         }
         bool READ_PARAMS = false;
         private void ReadParams_fun(object sender, EventArgs e)
@@ -850,7 +939,7 @@ namespace Stabilization
         private void button7_Click(object sender, EventArgs e)
         {
             SendCommandAsync("reset");
-            pb_working.BringToFront();
+            Show(pb_working);
 
         }
 
@@ -892,7 +981,7 @@ namespace Stabilization
                         log_usable.Enabled = true;
                         log_unusable.Enabled = true;
                         log_start.Enabled = false;
-                        pb_ok.BringToFront();
+                        Show(pb_ok);
                         _logStartTime = null;
                         Properties.Settings.Default.loggerName = loger_name.Text;
                         Properties.Settings.Default.Save();
@@ -934,6 +1023,16 @@ namespace Stabilization
         private void linkLabel1_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
             info_panel.Visible = !info_panel.Visible;
+        }
+    }
+
+    // إضافة method للحصول على القيم مع قيمة افتراضية
+    public static class DictionaryExtensions
+    {
+        public static TValue GetValueOrDefault<TKey, TValue>(this Dictionary<TKey, TValue> dictionary,
+                                                            TKey key, TValue defaultValue)
+        {
+            return dictionary.ContainsKey(key) ? dictionary[key] : defaultValue;
         }
     }
 }

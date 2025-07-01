@@ -87,8 +87,8 @@
 unsigned long lastPIDTime = 0;
 unsigned long lastSerialTime = 0;
 unsigned long lastTelemetryTime = 0;
-const unsigned long PID_INTERVAL = 0;       // 10ms = 100Hz for optimal response | 0ms for max response.
-const unsigned long SERIAL_INTERVAL = 100;     // Check serial every 5ms to reduce load
+const unsigned long PID_INTERVAL = 1;       // 10ms = 100Hz for optimal response | 0ms for max response.
+const unsigned long SERIAL_INTERVAL = 50;     // Check serial every 5ms to reduce load
 const unsigned long TELEMETRY_INTERVAL = 100; // Send data every 50ms to prevent flooding
 const int MAX_ANGLE = 60;  // +-60.
 
@@ -189,8 +189,8 @@ void loop() {
     
     // Safety check for valid angle
     if (isnan(angle) || abs(angle) > MAX_ANGLE) {
-      log("ERROR: Invalid angle detected!");
-      emergencyStop();
+      //log("ERROR: Invalid angle detected!");
+      //emergencyStop();
       return;
     }
   }
@@ -210,8 +210,6 @@ void loop() {
         Serial.print(currentTime);
         Serial.print(":");
         Serial.print(angle, 2);
-        Serial.print(":");
-        Serial.print(motor1);
         Serial.print(":");
         Serial.println(motor2);
       }

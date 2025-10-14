@@ -39,8 +39,8 @@ namespace Stabilization
         private DateTime _lastPerformanceUpdate = DateTime.Now;
 
         // Plot configuration
-        private const int MAX_PLOT_POINTS = 200;
-        private const int PLOT_UPDATE_INTERVAL_MS = 16; // ~60 FPS
+        private const int MAX_PLOT_POINTS = 800; // افتراضي 200
+        private const int PLOT_UPDATE_INTERVAL_MS = 2; // 16 = ~60 FPS  افتراضي.. 
         private const int DATA_PROCESSING_DELAY_MS = 1; // Minimal delay for CPU efficiency
 
         public double Setpoint { get; set; } = 0;
@@ -91,6 +91,7 @@ namespace Stabilization
                 Thread.Sleep(500);
                 // Use BeginInvoke to ensure UI thread access
                 BeginInvoke(new Action(() => btconnect_Click(null, null)));
+                // Clear the graph
             });
         }
 
@@ -116,10 +117,10 @@ namespace Stabilization
             nudBaseSpeed.Value = Properties.Settings.Default.PWMbase;
             nudLimit.Value = Properties.Settings.Default.PIDOut;
             loger_name.Text = Properties.Settings.Default.loggerName;
+            baseSpeed = (int)nudBaseSpeed.Value;
+            limit = (int)nudLimit.Value;
 
 
-            // Clear the graph
-            plot.chart1.Series["Series1"].Points.Clear();
         }
 
         private void InitializeRealTimeProcessing()
@@ -237,6 +238,7 @@ namespace Stabilization
                     }
                     else if (_readingStatus && data.Contains(":"))
                     {
+                        AppendToInfoLog(data);
                         ParseStatusParameter(data);
                         return false;
                     }
@@ -245,11 +247,7 @@ namespace Stabilization
                 // تخطي الرسائل المعلوماتية
                 if (data.StartsWith(">>"))
                 {
-                    BeginInvoke(new Action(() =>
-                    {
-                        rtbInfoData.AppendText($"{data}{Environment.NewLine}");
-                        rtbInfoData.ScrollToCaret();
-                    }));
+                    AppendToInfoLog(data);
                     Show(pb_ok);
                     return false;
                 }
@@ -317,7 +315,7 @@ namespace Stabilization
                         {
                             // تحديث عرض البيانات الخام (مخفف)
                             //if (_dataPointsReceived % 5 != 0)
-                            if(cbDisableLogs.Checked ==false)
+                            if (cbDisableLogs.Checked == false)
                             {
                                 var lastPoint = batchPoints.Last();
                                 var displayText = $"{lastPoint.Millis}:{lastPoint.Angle:F2}:{lastPoint.Output}";
@@ -370,12 +368,19 @@ namespace Stabilization
             {
                 // معالجة دفعة من النقاط لضمان الأداء السلس
                 var pointsToProcess = new List<SerialDataPoint>();
-                int maxPointsPerUpdate = 10; // تحديد الحد الأقصى لنقاط كل تحديث
+                int maxPointsPerUpdate = 1; // تحديد الحد الأقصى لنقاط كل تحديث
 
                 while (_dataQueue.TryDequeue(out SerialDataPoint point) &&
                        pointsToProcess.Count < maxPointsPerUpdate)
                 {
                     pointsToProcess.Add(point);
+
+                }
+                if (!cbDisableLogs.Checked && pointsToProcess.Count > 0)
+                {
+                    var p = pointsToProcess[pointsToProcess.Count - 1];            // آخر نقطة في الدُفعة
+                    string s = $"{p.Millis}:{p.Angle:F2}:{p.Output}";
+                    BeginInvoke((Action)(() => UpdateRawDataDisplay(s)));
                 }
 
                 if (pointsToProcess.Count > 0)
@@ -401,6 +406,12 @@ namespace Stabilization
                 AppendToErrorLog($"Plot timer error: {ex.Message}");
             }
         }
+
+
+        // حساب الإخراج المقيس
+        double scaledOutput = 0;
+        int baseSpeed = 1500;
+        int limit = 400;
 
         // 5. تحسين تحديث الرسم البياني
         private void UpdatePlotWithNewData(List<SerialDataPoint> newPoints)
@@ -436,14 +447,10 @@ namespace Stabilization
                     plot.label3.Text = Setpoint.ToString();
                     plot.label7.Text = point.Millis.ToString();
 
-                    // حساب الإخراج المقيس
-                    double scaledOutput = 0;
-                    int baseSpeed = (int)nudBaseSpeed.Value;
-                    int limit = (int)nudLimit.Value;
 
                     if (limit > 0)
                     {
-                        scaledOutput = (point.Output - baseSpeed) * 59.0 / limit;
+                        scaledOutput = (point.Output - baseSpeed) * 59.0 / limit; // from 1000 to 2000
                     }
 
                     seriesOutput.Points.AddY(scaledOutput);
@@ -557,6 +564,13 @@ namespace Stabilization
 
                 arduino.Open();
 
+                _processingCancellation.Cancel();
+                _processingCancellation.Dispose();
+
+                _processingCancellation = new CancellationTokenSource();
+                StartCommandProcessingTask();          // أعده كما في البداية
+
+
                 if (arduino.IsOpen)
                 {
                     // Save settings
@@ -572,6 +586,21 @@ namespace Stabilization
                     _plotTimer.Start();
                     Show(pb_ok);
                     AppendToErrorLog($"Connected to Arduino on port {mtbPortname.Text} at {cmBuadrite.Text} baud");
+
+                    // check if auto get params. 
+                    if (cb_autoReadParams.Checked)
+                    {
+                        // Start reading parameters
+                        _readingStatus = true;
+                        _currentParams.Clear();
+                        SendCommandAsync("hi");
+                        SendCommandAsync("status");
+                        Show(pb_working);
+                    }
+                    else
+                    {
+                        Show(pb_ok);
+                    }
                 }
                 else
                 {
@@ -593,7 +622,7 @@ namespace Stabilization
         {
             try
             {
-                if (arduino?.IsOpen == true || btconnect.Enabled)
+                if (arduino?.IsOpen == true || !btconnect.Enabled)
                 {
                     // Stop processing
                     _plotTimer.Stop();
@@ -603,10 +632,12 @@ namespace Stabilization
                     // Cleanup serial port
                     arduino.DataReceived -= Arduino_DataReceived;
                     arduino.ErrorReceived -= Arduino_ErrorReceived;
-                    arduino.DiscardInBuffer();
-                    arduino.DiscardOutBuffer();
-                    arduino.Close();
-
+                    if (arduino.IsOpen)
+                    {
+                        arduino.DiscardInBuffer();
+                        arduino.DiscardOutBuffer();
+                        arduino.Close();
+                    }
                     // Update UI
                     pictureBox1.Parent = panel4;
                     btconnect.Enabled = true;
@@ -615,11 +646,15 @@ namespace Stabilization
                     // Restart cancellation tokens for next connection
                     _processingCancellation = new CancellationTokenSource();
                     _plottingCancellation = new CancellationTokenSource();
-                    StartDataProcessingTask();
-                    StartCommandProcessingTask();
+                    // StartDataProcessingTask();
+                    //  StartCommandProcessingTask();
                     Show(pb_notconnect);
                     //  MessageBox.Show("Disconnected from Arduino", "Connection Status",
                     //           MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+
                 }
             }
             catch (Exception ex)
@@ -652,18 +687,59 @@ namespace Stabilization
             label7.Text = $"{sign}{trackBar1.Value}°";
         }
         bool _internal;
-
+        string _value;
+        string command;
         private void PIDTune(object sender, EventArgs e)
         {
             if (_internal) return;
 
             if (sender is NumericUpDown num && num.Tag is string tag)
             {
-                string command = $"{tag}:{num.Value.ToString(CultureInfo.InvariantCulture)}";
+                // read the value into two variables the int and the double.
+                int intValue = (int)num.Value;
+                // Assuming 4 decimal place
+                double decimalValue = (double)(num.Value - intValue); // Convert to decimal place
+
+                // convert the decimalValue into string string with out the int valie example: 0.001 > "001"
+                decimalValue = Math.Round(decimalValue, 4); // Round to 4 decimal places
+                decimalValue = decimalValue * 10000; // Convert to integer representation
+                //conver to string like "0000"
+                string decimalval = decimalValue.ToString("0000", CultureInfo.InvariantCulture);
+
+
+                if (tag == "Kpd" || "Kid" == tag || "Kdd" == tag)
+                {
+                    // convert the decimal value to int by multiplying it by 10
+                    command = $"{tag}:{decimalval}";
+                }
+                else
+                {
+                    command = $"{tag}:{intValue}";
+                }
                 SendCommandAsync(command);
                 BlinkButton(button2, false);
                 Show(pb_working);
 
+
+
+
+
+                /*
+                // check if the object has Dicemal place > 0 so cross it with 10^dicemal like 1.234 > 1234 into _value.
+                if (num.DecimalPlaces > 0)
+                {
+                    _value = ((double)num.Value * (int)Math.Pow(10, num.DecimalPlaces)).ToString(CultureInfo.InvariantCulture);
+                }
+                else
+                {
+                    _value = num.Value.ToString(CultureInfo.InvariantCulture);
+                }
+
+                string command = $"{tag}:{_value}";
+                SendCommandAsync(command);
+                BlinkButton(button2, false);
+                Show(pb_working);
+                */
             }
         }
 
@@ -717,8 +793,8 @@ namespace Stabilization
                     Kp = _currentParams.GetValueOrDefault("Kp", 0),
                     Ki = _currentParams.GetValueOrDefault("Ki", 0),
                     Kd = _currentParams.GetValueOrDefault("Kd", 0),
-                    limit = (int)_currentParams.GetValueOrDefault("Limit", 0),
-                    baseSpeed = (int)_currentParams.GetValueOrDefault("baseSpeed", 1000),
+                    limit = (int)_currentParams.GetValueOrDefault("Limit", 1),
+                    baseSpeed = (int)_currentParams.GetValueOrDefault("BaseSpeed", 1000),
                     setpoint = (int)_currentParams.GetValueOrDefault("Target", 0)
                 };
 
@@ -772,7 +848,21 @@ namespace Stabilization
                 }));
             }
         }
+        private void AppendToInfoLog(string data)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => AppendToInfoLog(data)));
+                return;
+            }
 
+            if (rtbInfoData.Lines.Length > 1000) // Limit display size
+            {
+                rtbInfoData.Clear();
+            }
+            rtbInfoData.AppendText($"{data}{Environment.NewLine}");
+            rtbInfoData.ScrollToCaret();
+        }
         private void UpdateRawDataDisplay(string data)
         {
             if (rtbRawData.Lines.Length > 1000) // Limit display size
@@ -883,11 +973,11 @@ namespace Stabilization
         {
             // Kp
             int kpInt = (int)Math.Floor(pidParams.Kp);
-            int kpFrac = (int)Math.Round((pidParams.Kp - kpInt) * 10000);
+            decimal kpFrac = Convert.ToDecimal(pidParams.Kp - kpInt);
             int kiInt = (int)Math.Floor(pidParams.Ki);
-            int kiFrac = (int)Math.Round((pidParams.Ki - kiInt) * 10000);
+            decimal kiFrac = Convert.ToDecimal(pidParams.Ki - kiInt);
             int kdInt = (int)Math.Floor(pidParams.Kd);
-            int kdFrac = (int)Math.Round((pidParams.Kd - kdInt) * 10000);
+            decimal kdFrac = Convert.ToDecimal(pidParams.Kd - kdInt);
             // update the UI thread:
             if (InvokeRequired)
             {
@@ -947,7 +1037,8 @@ namespace Stabilization
         {
             if (_internal) return;      // يُنفَّذ فقط عند تعديل المستخدم
             // sendlimit: command with the value of this.
-            SendCommandAsync($"limit:{Convert.ToInt16(nudLimit.Value)}");
+            limit = Convert.ToInt16(nudLimit.Value);
+            SendCommandAsync($"limit:{limit}");
 
         }
 
@@ -955,7 +1046,8 @@ namespace Stabilization
         {
             if (_internal) return;      // يُنفَّذ فقط عند تعديل المستخدم
 
-            SendCommandAsync($"baseSpeed:{Convert.ToInt16(nudBaseSpeed.Value)}");
+            baseSpeed = Convert.ToInt16(nudBaseSpeed.Value);
+            SendCommandAsync($"baseSpeed:{baseSpeed}");
 
         }
 

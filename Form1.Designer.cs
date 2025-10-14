@@ -247,10 +247,16 @@
             // 
             // nudKpd
             // 
+            this.nudKpd.DecimalPlaces = 3;
+            this.nudKpd.Increment = new decimal(new int[] {
+            1,
+            0,
+            0,
+            196608});
             this.nudKpd.Location = new System.Drawing.Point(161, 63);
             this.nudKpd.Margin = new System.Windows.Forms.Padding(5, 3, 5, 3);
             this.nudKpd.Maximum = new decimal(new int[] {
-            9999,
+            9,
             0,
             0,
             0});
@@ -355,7 +361,7 @@
             this.trackBar1.Maximum = 60;
             this.trackBar1.Minimum = -60;
             this.trackBar1.Name = "trackBar1";
-            this.trackBar1.Size = new System.Drawing.Size(268, 32);
+            this.trackBar1.Size = new System.Drawing.Size(268, 45);
             this.trackBar1.TabIndex = 0;
             this.trackBar1.TickStyle = System.Windows.Forms.TickStyle.Both;
             this.trackBar1.Scroll += new System.EventHandler(this.trackBar1_Scroll);
@@ -557,10 +563,16 @@
             // 
             // nudKdd
             // 
+            this.nudKdd.DecimalPlaces = 3;
+            this.nudKdd.Increment = new decimal(new int[] {
+            1,
+            0,
+            0,
+            196608});
             this.nudKdd.Location = new System.Drawing.Point(161, 123);
             this.nudKdd.Margin = new System.Windows.Forms.Padding(5, 3, 5, 3);
             this.nudKdd.Maximum = new decimal(new int[] {
-            9999,
+            9,
             0,
             0,
             0});
@@ -583,10 +595,16 @@
             // 
             // nudKid
             // 
+            this.nudKid.DecimalPlaces = 3;
+            this.nudKid.Increment = new decimal(new int[] {
+            1,
+            0,
+            0,
+            196608});
             this.nudKid.Location = new System.Drawing.Point(161, 93);
             this.nudKid.Margin = new System.Windows.Forms.Padding(5, 3, 5, 3);
             this.nudKid.Maximum = new decimal(new int[] {
-            9999,
+            9,
             0,
             0,
             0});
@@ -614,10 +632,10 @@
             this.label4.Location = new System.Drawing.Point(146, 128);
             this.label4.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
             this.label4.Name = "label4";
-            this.label4.Size = new System.Drawing.Size(10, 16);
+            this.label4.Size = new System.Drawing.Size(14, 16);
             this.label4.TabIndex = 24;
             this.label4.Tag = "Kd";
-            this.label4.Text = ".";
+            this.label4.Text = "+";
             // 
             // label5
             // 
@@ -626,9 +644,9 @@
             this.label5.Location = new System.Drawing.Point(146, 98);
             this.label5.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
             this.label5.Name = "label5";
-            this.label5.Size = new System.Drawing.Size(10, 16);
+            this.label5.Size = new System.Drawing.Size(14, 16);
             this.label5.TabIndex = 23;
-            this.label5.Text = ".";
+            this.label5.Text = "+";
             // 
             // label6
             // 
@@ -637,9 +655,9 @@
             this.label6.Location = new System.Drawing.Point(146, 68);
             this.label6.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
             this.label6.Name = "label6";
-            this.label6.Size = new System.Drawing.Size(10, 16);
+            this.label6.Size = new System.Drawing.Size(14, 16);
             this.label6.TabIndex = 22;
-            this.label6.Text = ".";
+            this.label6.Text = "+";
             // 
             // UIupdater
             // 
@@ -662,7 +680,7 @@
             this.rtbInfoData.Location = new System.Drawing.Point(5, 3);
             this.rtbInfoData.Margin = new System.Windows.Forms.Padding(5, 3, 5, 3);
             this.rtbInfoData.Name = "rtbInfoData";
-            this.rtbInfoData.Size = new System.Drawing.Size(278, 547);
+            this.rtbInfoData.Size = new System.Drawing.Size(468, 564);
             this.rtbInfoData.TabIndex = 20;
             this.rtbInfoData.Text = "";
             // 
@@ -774,18 +792,18 @@
             this.tabControl1.Multiline = true;
             this.tabControl1.Name = "tabControl1";
             this.tabControl1.SelectedIndex = 0;
-            this.tabControl1.Size = new System.Drawing.Size(296, 595);
+            this.tabControl1.Size = new System.Drawing.Size(486, 595);
             this.tabControl1.SizeMode = System.Windows.Forms.TabSizeMode.FillToRight;
             this.tabControl1.TabIndex = 0;
             // 
             // tabPage1
             // 
             this.tabPage1.Controls.Add(this.rtbInfoData);
-            this.tabPage1.Location = new System.Drawing.Point(4, 38);
+            this.tabPage1.Location = new System.Drawing.Point(4, 21);
             this.tabPage1.Margin = new System.Windows.Forms.Padding(5, 3, 5, 3);
             this.tabPage1.Name = "tabPage1";
             this.tabPage1.Padding = new System.Windows.Forms.Padding(5, 3, 5, 3);
-            this.tabPage1.Size = new System.Drawing.Size(288, 553);
+            this.tabPage1.Size = new System.Drawing.Size(478, 570);
             this.tabPage1.TabIndex = 0;
             this.tabPage1.Text = "Response";
             this.tabPage1.UseVisualStyleBackColor = true;
@@ -885,7 +903,7 @@
             this.panel2.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panel2.Location = new System.Drawing.Point(0, 0);
             this.panel2.Name = "panel2";
-            this.panel2.Size = new System.Drawing.Size(710, 601);
+            this.panel2.Size = new System.Drawing.Size(520, 601);
             this.panel2.TabIndex = 26;
             this.panel2.Paint += new System.Windows.Forms.PaintEventHandler(this.panel2_Paint);
             // 
@@ -1315,10 +1333,10 @@
             this.info_panel.Controls.Add(this.tabControl1);
             this.info_panel.Dock = System.Windows.Forms.DockStyle.Right;
             this.info_panel.Font = new System.Drawing.Font("Helvetica", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.info_panel.Location = new System.Drawing.Point(710, 0);
+            this.info_panel.Location = new System.Drawing.Point(520, 0);
             this.info_panel.Name = "info_panel";
             this.info_panel.Padding = new System.Windows.Forms.Padding(3);
-            this.info_panel.Size = new System.Drawing.Size(302, 601);
+            this.info_panel.Size = new System.Drawing.Size(492, 601);
             this.info_panel.TabIndex = 27;
             this.info_panel.Visible = false;
             // 

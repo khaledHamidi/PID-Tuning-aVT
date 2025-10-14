@@ -14,6 +14,9 @@ namespace Stabilization
             this.Size = new Size(Screen.PrimaryScreen.Bounds.Width / 2, Screen.PrimaryScreen.Bounds.Height-30);
 
             this.Location = new Point(0, 0);
+            this.chart1.Series["Series1"].Points.Clear();
+            this.chart1.Series["target"].Points.Clear();
+            this.chart1.Series["out"].Points.Clear();
 
 
             // set the location to the right side of the screen

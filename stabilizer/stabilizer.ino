@@ -87,10 +87,10 @@
 unsigned long lastPIDTime = 0;
 unsigned long lastSerialTime = 0;
 unsigned long lastTelemetryTime = 0;
-const unsigned long PID_INTERVAL = 1;       // 10ms = 100Hz for optimal response | 0ms for max response.
-const unsigned long SERIAL_INTERVAL = 50;     // Check serial every 5ms to reduce load
-const unsigned long TELEMETRY_INTERVAL = 100; // Send data every 50ms to prevent flooding
-const int MAX_ANGLE = 60;  // +-60.
+const unsigned long PID_INTERVAL = 30;       // 10ms = 100Hz for optimal response | 0ms for max response.
+const unsigned long SERIAL_INTERVAL = 1000;     // Check serial every 5ms to reduce load
+const unsigned long TELEMETRY_INTERVAL = 300; // Send data every 50ms to prevent flooding
+const int MAX_ANGLE = 40  ;// +-60.
 
 /* Hardware objects */
 MPU6050 mpu(Wire);
@@ -107,7 +107,7 @@ int limit_range = 400;  // Full range ±400
 
 
 /* State variables */
-bool ERROR_ONLY = false;
+bool ERROR_ONLY = true;
 bool emergency = false;
 bool mpuConnected = false;
 String serialBuffer = "";
@@ -125,16 +125,33 @@ static inline void setWhole(double& v, long w) {
   v = w + (v - floor(v));
 }
 
-static inline void setDecimal(double& v, const String& s) {
-  if (s.length() == 0) return;
-  long n = s.toInt();
-  int len = s.length();
-  double d = (double)n / pow(10, len);
-  v = floor(v) + d;
+//  يستبدل الجزء الكسري لـ v بالأرقام الموجودة في السلسلة s.
+//  يتجاهل أي محارف غير رقمية (مثل "s= 0001") ويحافظ على إشارة العدد.
+static inline void setDecimal(double& v, const String& s)
+{
+    // استخراج الأرقام فقط
+    String digits;
+    for (char c : s) {
+        if (isDigit(c)) digits += c;
+    }
+    if (digits.length() == 0) return;          // لا أرقام
+
+    unsigned long n = digits.toInt();          // القيمة الرقمية
+    uint8_t len    = digits.length();          // عدد المنازل
+
+    double frac = static_cast<double>(n) / pow(10.0, len);  // الجزء الكسري الجديد
+
+    // الجزء الصحيح مع مراعاة الإشارة
+    double intPart = (v >= 0.0) ? floor(v) : ceil(v);
+
+    // إعادة تركيب العدد
+    v = (v >= 0.0) ? intPart + frac
+                   : intPart - frac;
 }
 
+
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(2500000);
   log("System initializing...");
   
   /* Initialize I2C with error checking */
@@ -202,7 +219,7 @@ void loop() {
       int motor2 = constrain(baseSpeed + out, 1000, 2000);
       
       ESC.writeMicroseconds(motor1);
-      ESC2.writeMicroseconds(motor2);
+    //  ESC2.writeMicroseconds(motor2);
       
       // Send telemetry at lower frequency to reduce overhead
       if (currentTime - lastTelemetryTime >= TELEMETRY_INTERVAL && !ERROR_ONLY) {

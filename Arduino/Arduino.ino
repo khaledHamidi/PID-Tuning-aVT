@@ -1,13 +1,13 @@
 /*
 ================================================================================
-                        🤖 ARDUINO SELF-BALANCING by KHALED HAMIDI
+                         ARDUINO SELF-BALANCING by KHALED HAMIDI
 ================================================================================
 
-📋 PROJECT OVERVIEW:
+ PROJECT OVERVIEW:
    Advanced PID-controlled self-balancing system using MPU6050 IMU sensor
    and dual ESC-driven brushless motors for real-time balance control.
 
-🎯 MAIN FEATURES:
+ MAIN FEATURES:
    ✓ Real-time PID control loop (100Hz frequency)
    ✓ Live parameter tuning via serial interface
    ✓ Persistent EEPROM storage for all settings
@@ -15,7 +15,7 @@
    ✓ System diagnostics and telemetry
    ✓ Optimized performance with timed intervals
 
-🔌 HARDWARE CONNECTIONS:
+ HARDWARE CONNECTIONS:
    MPU6050 IMU Sensor:
    ├── VCC    →  5V        (Power supply)
    ├── GND    →  GND       (Ground)
@@ -26,14 +26,14 @@
    ├── ESC1   →  Pin 9     (Left motor control)
    └── ESC2   →  Pin 10    (Right motor control)
 
-⚙️ SYSTEM PARAMETERS:
+⚙ SYSTEM PARAMETERS:
    • PID Frequency: 100Hz (10ms intervals)
    • Serial Baud Rate: 115200
    • I²C Clock: 400kHz
    • Motor PWM Range: 1000-2000 μs
    • Base Speed: 1500 μs (neutral position)
    • Max Output Limit: ±400
-📡 SERIAL COMMANDS:
+ SERIAL COMMANDS:
    PID Tuning:
    ├── Kp:<value>      → Set proportional gain (integer part)
    ├── Kpd:<value>     → Set proportional gain (decimal part)
@@ -57,14 +57,14 @@
    ├── monitor:on      → Enable telemetry output
    └── monitor:off     → Disable telemetry output
 
-🚀 PERFORMANCE OPTIMIZATIONS:
+ PERFORMANCE OPTIMIZATIONS:
    • Timed serial processing (every 5ms)
    • Reduced telemetry frequency (every 50ms)
    • Fixed PID computation intervals
    • Efficient I²C communication
    • Input validation and error handling
 
-⚠️ SAFETY FEATURES:
+ SAFETY FEATURES:
    • Automatic emergency stop on sensor failure
    • Angle range validation (±60°)
    • Parameter bounds checking
@@ -89,7 +89,7 @@ unsigned long lastSerialTime = 0;
 unsigned long lastTelemetryTime = 0;
 const unsigned long PID_INTERVAL = 30;       // 10ms = 100Hz for optimal response | 0ms for max response.
 const unsigned long SERIAL_INTERVAL = 1000;     // Check serial every 5ms to reduce load
-const unsigned long TELEMETRY_INTERVAL = 300; // Send data every 50ms to prevent flooding
+const unsigned long TELEMETRY_INTERVAL = 1; // Send data every 50ms to prevent flooding
 const int MAX_ANGLE = 40  ;// +-60.
 
 /* Hardware objects */
@@ -107,7 +107,7 @@ int limit_range = 400;  // Full range ±400
 
 
 /* State variables */
-bool ERROR_ONLY = true;
+bool ERROR_ONLY = false;
 bool emergency = false;
 bool mpuConnected = false;
 String serialBuffer = "";
@@ -151,7 +151,7 @@ static inline void setDecimal(double& v, const String& s)
 
 
 void setup() {
-  Serial.begin(2500000);
+  Serial.begin(9600);
   log("System initializing...");
   
   /* Initialize I2C with error checking */

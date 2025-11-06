@@ -3,10 +3,10 @@
   <Profiles />
   <Settings>
     <Setting Name="PortName" Type="System.String" Scope="User">
-      <Value Profile="(Default)">COM9</Value>
+      <Value Profile="(Default)">COM1</Value>
     </Setting>
     <Setting Name="BaudRate" Type="System.Int64" Scope="User">
-      <Value Profile="(Default)">115200</Value>
+      <Value Profile="(Default)">9600</Value>
     </Setting>
     <Setting Name="Kp" Type="System.Int32" Scope="User">
       <Value Profile="(Default)">1</Value>

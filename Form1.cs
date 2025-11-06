@@ -1,11 +1,15 @@
-﻿using System;
-using System.Collections.Concurrent;
+﻿// Form1.cs - Complete Refactored Version
+using Stabilization.Controllers;
+using Stabilization.Infrastructure.Serial;
+using Stabilization.Models;
+using Stabilization.Services.DataProcessing;
+using Stabilization.Services.Visualization;
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
-using System.IO.Ports;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -13,101 +17,90 @@ namespace Stabilization
 {
     public partial class Form1 : Form
     {
-        #region Fields and Properties
+        private readonly BalancingPlatformController _controller;
+        private readonly IPlotService _plotService;
+        private AsyncLogger _logger;
+        private  System.Timers.Timer _plotTimer;
 
-        // Thread-safe collections for high-performance data handling
-        private readonly ConcurrentQueue<SerialDataPoint> _dataQueue = new ConcurrentQueue<SerialDataPoint>();
-        private readonly ConcurrentQueue<string> _commandQueue = new ConcurrentQueue<string>();
-
-        // Cancellation tokens for clean shutdown
-        private CancellationTokenSource _processingCancellation = new CancellationTokenSource();
-        private CancellationTokenSource _plottingCancellation = new CancellationTokenSource();
-
-        private bool _readingStatus = false;
-        private Dictionary<string, double> _currentParams = new Dictionary<string, double>();
+        private double _setpoint = 0;
+        private int _baseSpeed = 1500;
+        private int _limit = 400;
+        private bool _internalUpdate = false;
+        private readonly Queue<SerialDataPoint> _plotDataQueue = new Queue<SerialDataPoint>();
+        private readonly object _plotQueueLock = new object();
+        private Plot plot = new Plot();
 
 
-        // High-resolution timer for consistent plotting
-        private System.Windows.Forms.Timer _plotTimer;
+        // Performance monitoring variables
+        private int _samplesPerSecond = 0;
+        private int _samplesThisSecond = 0;
+        private DateTime _lastSecondUpdate = DateTime.Now;
+        private readonly List<double> _plotIntervals = new List<double>();
+        private double _averagePlotInterval = 0;
+        private double _maxJitter = 0;
+        private DateTime _lastPlotTime = DateTime.Now;
+        private long _totalSamplesPlotted = 0;
+        private DateTime _lastPerformanceLog = DateTime.Now;
 
-        // Buffered data for smooth plotting
-        private readonly object _dataLock = new object();
-        private volatile bool _newDataAvailable = false;
+        private int _serialDataHz = 0;
+        private int _serialBytesThisSecond = 0;
+        private DateTime _lastSerialRateUpdate = DateTime.Now;
+        private int _totalSerialBytes = 0;
 
-        // Performance counters
-        private int _dataPointsReceived = 0;
-        private DateTime _lastPerformanceUpdate = DateTime.Now;
+        private int _serialMessagesHz = 0;
+        private int _serialMessagesThisSecond = 0;
 
-        // Plot configuration
-        private const int MAX_PLOT_POINTS = 800; // افتراضي 200
-        private const int PLOT_UPDATE_INTERVAL_MS = 2; // 16 = ~60 FPS  افتراضي.. 
-        private const int DATA_PROCESSING_DELAY_MS = 1; // Minimal delay for CPU efficiency
-
-        public double Setpoint { get; set; } = 0;
-
-        Plot plot = new Plot();
-
-        #endregion
-
-        #region Data Structures
-
-        public struct SerialDataPoint
-        {
-            public double Angle;
-            public int Output;
-            public DateTime Timestamp;
-            public long SequenceNumber;
-            public long Millis;      // Arduino timestamp in milliseconds
-
-            public SerialDataPoint(long millis, double angle, int output, long sequenceNumber = 0)
-            {
-                Millis = millis;
-                Angle = angle;
-                Output = output;
-                Timestamp = DateTime.Now;
-                SequenceNumber = sequenceNumber;
-            }
-        }
-        public struct PIDParameters
-        {
-            public double Kp { get; set; }
-            public double Ki { get; set; }
-            public double Kd { get; set; }
-            public int limit { get; set; }
-            public int baseSpeed { get; set; }
-
-            public int setpoint { get; set; }
-        }
+        private int _plotUpdatesCount = 0;
+        private DateTime _lastPlotUpdateTime = DateTime.Now;
+        private int _serialMessagesReceived = 0;
 
         public Form1()
         {
             InitializeComponent();
-            InitializeSettings();
-            InitializeRealTimeProcessing();
+
+            // Initialize services
+            var communicator = new ArduinoSerialCommunicator();
+            var parser = new ArduinoDataParser();
+            var dataProcessor = new DataStreamProcessor(parser);
+
+            _controller = new BalancingPlatformController(communicator, dataProcessor);
+            _plotService = new ChartPlotService(plot); // Use existing plot form
+
+            InitializeUI();
+            WireUpEvents();
+
+            // Show plot form
             plot.Show();
-            // Move delay and connect to a background thread to avoid blocking the UI
-            Task.Run(() =>
+
+            // Auto-connect after delay
+            Task.Run(async () =>
             {
-                Thread.Sleep(500);
-                // Use BeginInvoke to ensure UI thread access
+                await Task.Delay(500);
                 BeginInvoke(new Action(() => btconnect_Click(null, null)));
-                // Clear the graph
             });
         }
 
-        private void InitializeSettings()
+        private void InitializeUI()
         {
-            // this lcoation is on right and down.
+            // Position form
             this.StartPosition = FormStartPosition.Manual;
-            // calculat postion to be all window of right and down.
-            // get this width and hiens to calculation postion.
-            this.Location = new Point(Screen.PrimaryScreen.Bounds.Width - this.Width, Screen.PrimaryScreen.Bounds.Height - this.Height - 30);
-            //is.Location = new Point(627, 202);
-            // Load settings (your existing code)
+            this.Location = new Point(
+                Screen.PrimaryScreen.Bounds.Width - this.Width,
+                Screen.PrimaryScreen.Bounds.Height - this.Height - 30);
+
+            // Load settings
+            LoadSettings();
+
+            // Initialize plot timer
+            _plotTimer = new System.Timers.Timer(20);
+            _plotTimer.Elapsed += PlotTimer_Tick;
+        }
+
+        private void LoadSettings()
+        {
             mtbPortname.Text = Properties.Settings.Default.PortName;
             cmBuadrite.Text = Properties.Settings.Default.BaudRate.ToString();
 
-            // Load PID values
             nudKp.Value = Properties.Settings.Default.Kp;
             nudKi.Value = Properties.Settings.Default.Ki;
             nudKd.Value = Properties.Settings.Default.Kd;
@@ -117,484 +110,64 @@ namespace Stabilization
             nudBaseSpeed.Value = Properties.Settings.Default.PWMbase;
             nudLimit.Value = Properties.Settings.Default.PIDOut;
             loger_name.Text = Properties.Settings.Default.loggerName;
-            baseSpeed = (int)nudBaseSpeed.Value;
-            limit = (int)nudLimit.Value;
 
-
+            _baseSpeed = (int)nudBaseSpeed.Value;
+            _limit = (int)nudLimit.Value;
         }
 
-        private void InitializeRealTimeProcessing()
+        private void WireUpEvents()
         {
-            // Configure high-performance timer for plotting
-            _plotTimer = new System.Windows.Forms.Timer();
-            _plotTimer.Interval = PLOT_UPDATE_INTERVAL_MS;
-            _plotTimer.Tick += PlotTimer_Tick;
+            _controller.DataPointReceived += OnDataPointReceived;
+            _controller.ParametersUpdated += OnParametersUpdated;
+            _controller.StatusChanged += OnStatusChanged;
+            _controller.MessageReceived += OnMessageReceived;
 
-            // Start background processing tasks
-            StartDataProcessingTask();
-            StartCommandProcessingTask();
+            // Add serial data rate measurement
+            _controller.RawDataReceived += OnRawDataReceived;
         }
-
-        #endregion
-
-        #region Connection Management
-        // 1. تحسين معالجة البيانات الواردة
-        private void Arduino_DataReceived(object sender, SerialDataReceivedEventArgs e)
+        private void OnRawDataReceived(object sender, string rawData)
         {
-            try
-            {
-                if (!arduino.IsOpen) return; // تحقق من حالة الاتصال
+            // Count complete messages (lines)
+            int messageCount = rawData.Count(c => c == '\n');
+            _serialMessagesThisSecond += messageCount;
 
-                string newData = arduino.ReadExisting();
-                if (string.IsNullOrEmpty(newData)) return;
-
-                lock (_bufferLock)
-                {
-                    _serialBuffer += newData;
-
-                    // معالجة جميع الأسطر المكتملة
-                    string[] lines = _serialBuffer.Split('\n');
-
-                    // الاحتفاظ بآخر سطر غير مكتمل
-                    _serialBuffer = lines[lines.Length - 1];
-
-                    // معالجة جميع الأسطر المكتملة
-                    for (int i = 0; i < lines.Length - 1; i++)
-                    {
-                        string completeLine = lines[i].Trim('\r', '\n', ' ', '\t');
-
-                        if (string.IsNullOrEmpty(completeLine)) continue;
-
-                        // تسجيل البيانات الخام للتشخيص
-                        if (_dataPointsReceived % 50 == 0 && !cbDisableLogs.Checked)
-                        {
-                            Task.Run(() => AppendToErrorLog($"Raw data: '{completeLine}'"));
-                        }
-
-                        // تحليل ووضع البيانات في الطابور
-                        if (TryParseDataPoint(completeLine, out SerialDataPoint dataPoint))
-                        {
-                            _dataQueue.Enqueue(dataPoint);
-                            Interlocked.Increment(ref _dataPointsReceived);
-
-                            // تعيين علامة توفر بيانات جديدة
-                            lock (_dataLock)
-                            {
-                                _newDataAvailable = true;
-                            }
-                        }
-                        else if (!cbDisableLogs.Checked)
-                        {
-                            BeginInvoke(new Action(() =>
-                                rtbError.AppendText($"Parse failed: '{completeLine}'{Environment.NewLine}")
-                            ));
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                if (!cbDisableLogs.Checked)
-                    Task.Run(() => AppendToErrorLog($"Data receive error: {ex.Message}"));
-            }
+            UpdateSerialDataRate();
         }
-        #endregion
 
-        #region High-Performance Data Processing
-
-        // Buffer for handling partial data
-        private string _serialBuffer = "";
-        private readonly object _bufferLock = new object();
-
-
-        // 2. تحسين تحليل البيانات
-        private bool TryParseDataPoint(string data, out SerialDataPoint dataPoint)
+        private void UpdateSerialDataRate()
         {
-            dataPoint = default;
+            var now = DateTime.Now;
+            var timeSinceLastUpdate = (now - _lastSerialRateUpdate).TotalSeconds;
 
-            try
+            if (timeSinceLastUpdate >= 1.0)
             {
-                // تنظيف البيانات
-                data = data.Trim('\r', '\n', ' ', '\t');
+                _serialMessagesHz = (int)(_serialMessagesThisSecond / timeSinceLastUpdate);
+                _serialMessagesThisSecond = 0;
+                _lastSerialRateUpdate = now;
 
-                if (string.IsNullOrEmpty(data) || data.Length < 3)
-                    return false;
-
-                // معالجة حالة قراءة المعاملات (STATUS)
-                if (READ_PARAMS)
-                {
-                    if (data == "STATUS_START")
-                    {
-                        _readingStatus = true;
-                        _currentParams.Clear();
-                        return false;
-                    }
-                    else if (data == "STATUS_END")
-                    {
-                        _readingStatus = false;
-                        READ_PARAMS = false;
-                        ProcessStatusParameters();
-                        return false;
-                    }
-                    else if (_readingStatus && data.Contains(":"))
-                    {
-                        AppendToInfoLog(data);
-                        ParseStatusParameter(data);
-                        return false;
-                    }
-                }
-
-                // تخطي الرسائل المعلوماتية
-                if (data.StartsWith(">>"))
-                {
-                    AppendToInfoLog(data);
-                    Show(pb_ok);
-                    return false;
-                }
-
-                // تحليل البيانات بصيغة "millis:angle:output"
-                var parts = data.Split(':');
-                if (parts.Length != 3)
-                {
-                    // المحاولة بالفاصلة كبديل
-                    parts = data.Split(',');
-                    if (parts.Length != 3)
-                        return false;
-                }
-
-                // تحليل القيم الثلاث
-                if (long.TryParse(parts[0].Trim(), out long millis) &&
-                    double.TryParse(parts[1].Trim(),
-                                  NumberStyles.Float,
-                                  CultureInfo.InvariantCulture, out double angle) &&
-                    int.TryParse(parts[2].Trim(),
-                                NumberStyles.Integer,
-                                CultureInfo.InvariantCulture, out int output))
-                {
-                    // التحقق من صحة النطاقات (تحذير فقط، لا رفض)
-                    if (Math.Abs(angle) > 180 || Math.Abs(output) > 5000)
-                    {
-                        if (!cbDisableLogs.Checked)
-                            Task.Run(() => AppendToErrorLog(
-                                $"Unusual values - Millis: {millis}, Angle: {angle:F2}, Output: {output}"));
-                    }
-
-                    dataPoint = new SerialDataPoint(millis, angle, output, _dataPointsReceived);
-                    return true;
-                }
-
-                return false;
-            }
-            catch (Exception ex)
-            {
-                if (!cbDisableLogs.Checked)
-                    Task.Run(() => AppendToErrorLog($"Parse exception for '{data}': {ex.Message}"));
-                return false;
-            }
-        }
-        // 3. تحسين معالجة البيانات في المهمة الخلفية
-        private void StartDataProcessingTask()
-        {
-            Task.Run(async () =>
-            {
-                var batchPoints = new List<SerialDataPoint>();
-
-                while (!_processingCancellation.Token.IsCancellationRequested)
-                {
-                    try
-                    {
-                        batchPoints.Clear();
-
-                        // جمع دفعة من النقاط لمعالجة أكثر كفاءة
-                        while (_dataQueue.TryDequeue(out SerialDataPoint point) && batchPoints.Count < 20)
-                        {
-                            batchPoints.Add(point);
-                        }
-
-                        if (batchPoints.Count > 0)
-                        {
-                            // تحديث عرض البيانات الخام (مخفف)
-                            //if (_dataPointsReceived % 5 != 0)
-                            if (cbDisableLogs.Checked == false)
-                            {
-                                var lastPoint = batchPoints.Last();
-                                var displayText = $"{lastPoint.Millis}:{lastPoint.Angle:F2}:{lastPoint.Output}";
-                                BeginInvoke(new Action(() => UpdateRawDataDisplay(displayText)));
-                            }
-
-                            // تحديث إشارة البيانات الجديدة للرسم
-                            lock (_dataLock)
-                            {
-                                _newDataAvailable = true;
-                            }
-                        }
-
-                        // تأخير قصير لمنع استهلاك CPU مرتفع
-                        await Task.Delay(1, _processingCancellation.Token);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        Show(pb_wrong);
-                        AppendToErrorLog($"Data processing error: {ex.Message}");
-                        await Task.Delay(100); // تأخير أطول عند حدوث خطأ
-                    }
-                }
-            }, _processingCancellation.Token);
-        }
-
-
-        #endregion
-
-        #region Real-Time Plotting
-
-        // 4. تحسين مؤقت الرسم
-        private void PlotTimer_Tick(object sender, EventArgs e)
-        {
-            bool hasNewData;
-            lock (_dataLock)
-            {
-                hasNewData = _newDataAvailable;
-                _newDataAvailable = false; // إعادة تعيين العلامة
-            }
-
-            if (!hasNewData || plot?.chart1 == null)
-                return;
-
-            try
-            {
-                // معالجة دفعة من النقاط لضمان الأداء السلس
-                var pointsToProcess = new List<SerialDataPoint>();
-                int maxPointsPerUpdate = 1; // تحديد الحد الأقصى لنقاط كل تحديث
-
-                while (_dataQueue.TryDequeue(out SerialDataPoint point) &&
-                       pointsToProcess.Count < maxPointsPerUpdate)
-                {
-                    pointsToProcess.Add(point);
-
-                }
-                if (!cbDisableLogs.Checked && pointsToProcess.Count > 0)
-                {
-                    var p = pointsToProcess[pointsToProcess.Count - 1];            // آخر نقطة في الدُفعة
-                    string s = $"{p.Millis}:{p.Angle:F2}:{p.Output}";
-                    BeginInvoke((Action)(() => UpdateRawDataDisplay(s)));
-                }
-
-                if (pointsToProcess.Count > 0)
-                {
-                    UpdatePlotWithNewData(pointsToProcess);
-
-                    // إعادة تعيين العلامة إذا بقيت نقاط في الطابور
-                    lock (_dataLock)
-                    {
-                        _newDataAvailable = _dataQueue.Count > 0;
-                    }
-                }
-
-                // تحديث عداد الأداء
-                if ((DateTime.Now - _lastPerformanceUpdate).TotalSeconds >= 2.0)
-                {
-                    UpdatePerformanceDisplay();
-                }
-            }
-            catch (Exception ex)
-            {
-                Show(pb_wrong);
-                AppendToErrorLog($"Plot timer error: {ex.Message}");
+                //   AppendToPerformancLog($"[SERIAL] Messages Rate: {_serialMessagesHz} Hz");
             }
         }
 
-
-        // حساب الإخراج المقيس
-        double scaledOutput = 0;
-        int baseSpeed = 1500;
-        int limit = 400;
-
-        // 5. تحسين تحديث الرسم البياني
-        private void UpdatePlotWithNewData(List<SerialDataPoint> newPoints)
-        {
-            if (plot?.chart1?.Series == null || newPoints.Count == 0)
-                return;
-
-            try
-            {
-                var seriesAngle = plot.chart1.Series["Series1"];
-                var seriesOutput = plot.chart1.Series["out"];
-                var seriesTarget = plot.chart1.Series["target"];
-
-                // تعليق التحديث لتحسين الأداء
-                plot.chart1.SuspendLayout();
-
-                foreach (var point in newPoints)
-                {
-                    // الحفاظ على نافذة متحركة
-                    if (seriesAngle.Points.Count >= MAX_PLOT_POINTS)
-                    {
-                        seriesAngle.Points.RemoveAt(0);
-                        if (seriesOutput.Points.Count > 0) seriesOutput.Points.RemoveAt(0);
-                        if (seriesTarget.Points.Count > 0) seriesTarget.Points.RemoveAt(0);
-                    }
-
-                    // إضافة نقطة الزاوية
-                    seriesAngle.Points.AddY(point.Angle);
-
-                    // تحديث تسميات العرض
-                    plot.label1.Text = point.Angle.ToString("F2", CultureInfo.InvariantCulture);
-                    plot.label2.Text = point.Output.ToString();
-                    plot.label3.Text = Setpoint.ToString();
-                    plot.label7.Text = point.Millis.ToString();
-
-
-                    if (limit > 0)
-                    {
-                        scaledOutput = (point.Output - baseSpeed) * 59.0 / limit; // from 1000 to 2000
-                    }
-
-                    seriesOutput.Points.AddY(scaledOutput);
-                    seriesTarget.Points.AddY(Setpoint);
-
-                    // تسجيل البيانات
-                    logger?.Record((int)Setpoint, point.Angle, point.Output, point.Millis);
-                }
-
-                // استئناف التحديث وإعادة رسم واحدة
-                plot.chart1.ResumeLayout();
-                plot.chart1.Invalidate();
-
-                // تسجيل تشخيصي
-                if (_dataPointsReceived % 100 == 0 && !cbDisableLogs.Checked)
-                {
-                    var lastPoint = newPoints.Last();
-                    AppendToErrorLog($"Plotted batch: {newPoints.Count} points, " +
-                                   $"Last: Millis={lastPoint.Millis}, Angle={lastPoint.Angle:F2}");
-                }
-            }
-            catch (Exception ex)
-            {
-                plot.chart1.ResumeLayout(); // تأكد من استئناف التخطيط حتى عند الخطأ
-                AppendToErrorLog($"Plot update error: {ex.Message}");
-            }
-        }
-
-        #endregion
-
-
-
-
-
-
-
-
-
-        #region Command Processing
-
-        private void StartCommandProcessingTask()
-        {
-            Task.Run(async () =>
-            {
-                while (!_processingCancellation.Token.IsCancellationRequested)
-                {
-                    try
-                    {
-                        if (_commandQueue.TryDequeue(out string command))
-                        {
-                            if (arduino?.IsOpen == true)
-                            {
-                                arduino.WriteLine(command);
-                                BeginInvoke(new Action(() =>
-                                    rtbSendData.AppendText($"Sent: {command}{Environment.NewLine}")));
-                            }
-                        }
-
-                        await Task.Delay(1, _processingCancellation.Token);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        if (!cbDisableLogs.Checked)
-                            AppendToErrorLog($"Command processing error: {ex.Message}");
-                    }
-                }
-            }, _processingCancellation.Token);
-        }
-
-        // Thread-safe command sending
-        public void SendCommandAsync(string command)
-        {
-            if (!string.IsNullOrWhiteSpace(command))
-            {
-                _commandQueue.Enqueue(command);
-            }
-        }
-        public void SendCommand(string command)
-        {
-            if (!string.IsNullOrWhiteSpace(command))
-            {
-                arduino.WriteLine(command);
-            }
-        }
-
-        #endregion
-
-        #region UI Event Handlers
-
-
-        private void btconnect_Click(object sender, EventArgs e)
+        private async void btconnect_Click(object sender, EventArgs e)
         {
             try
             {
-                arduino.PortName = mtbPortname.Text;
-                arduino.BaudRate = Convert.ToInt32(cmBuadrite.Text);
+                bool connected = await _controller.ConnectAsync(
+                    mtbPortname.Text,
+                    Convert.ToInt32(cmBuadrite.Text));
 
-                // Configure serial port for optimal performance
-                arduino.ReadBufferSize = 8192; // Larger buffer
-                arduino.WriteBufferSize = 2048;
-                arduino.ReadTimeout = 100;
-                arduino.WriteTimeout = 100;
-                arduino.NewLine = "\n";
-
-                arduino.DataReceived += Arduino_DataReceived;
-                arduino.ErrorReceived += Arduino_ErrorReceived;
-
-                arduino.Open();
-
-                _processingCancellation.Cancel();
-                _processingCancellation.Dispose();
-
-                _processingCancellation = new CancellationTokenSource();
-                StartCommandProcessingTask();          // أعده كما في البداية
-
-
-                if (arduino.IsOpen)
+                if (connected)
                 {
-                    // Save settings
-                    Properties.Settings.Default.PortName = mtbPortname.Text;
-                    Properties.Settings.Default.BaudRate = Convert.ToInt32(cmBuadrite.Text);
-                    Properties.Settings.Default.Save();
-
-                    // Update UI
-                    btconnect.Enabled = false;
-                    btdisconnect.Enabled = true;
-                    pictureBox7.Hide();
-                    // Start real-time processing
+                    SaveConnectionSettings();
+                    UpdateConnectionUI(true);
                     _plotTimer.Start();
-                    Show(pb_ok);
+
                     AppendToErrorLog($"Connected to Arduino on port {mtbPortname.Text} at {cmBuadrite.Text} baud");
 
-                    // check if auto get params. 
                     if (cb_autoReadParams.Checked)
                     {
-                        // Start reading parameters
-                        _readingStatus = true;
-                        _currentParams.Clear();
-                        SendCommandAsync("hi");
-                        SendCommandAsync("status");
+                        await _controller.RequestStatusAsync();
                         Show(pb_working);
                     }
                     else
@@ -605,158 +178,107 @@ namespace Stabilization
                 else
                 {
                     MessageBox.Show("Failed to connect to Arduino", "Connection Error",
-                                  MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
                     Show(pb_notconnect);
                 }
             }
             catch (Exception ex)
             {
                 Show(pb_notconnect);
-
                 MessageBox.Show($"Connection Error: {ex.Message}", "Error",
-                              MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private void btdisconnect_Click(object sender, EventArgs e)
+        private async void btdisconnect_Click(object sender, EventArgs e)
         {
             try
             {
-                if (arduino?.IsOpen == true || !btconnect.Enabled)
-                {
-                    // Stop processing
-                    _plotTimer.Stop();
-                    _processingCancellation.Cancel();
-                    _plottingCancellation.Cancel();
-
-                    // Cleanup serial port
-                    arduino.DataReceived -= Arduino_DataReceived;
-                    arduino.ErrorReceived -= Arduino_ErrorReceived;
-                    if (arduino.IsOpen)
-                    {
-                        arduino.DiscardInBuffer();
-                        arduino.DiscardOutBuffer();
-                        arduino.Close();
-                    }
-                    // Update UI
-                    pictureBox1.Parent = panel4;
-                    btconnect.Enabled = true;
-                    btdisconnect.Enabled = false;
-                    pictureBox7.Show();
-                    // Restart cancellation tokens for next connection
-                    _processingCancellation = new CancellationTokenSource();
-                    _plottingCancellation = new CancellationTokenSource();
-                    // StartDataProcessingTask();
-                    //  StartCommandProcessingTask();
-                    Show(pb_notconnect);
-                    //  MessageBox.Show("Disconnected from Arduino", "Connection Status",
-                    //           MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                else
-                {
-
-                }
+                _plotTimer.Stop();
+                // await _controller.DisconnectAsync();
+                var disconnectTask = _controller?.DisconnectAsync();
+                UpdateConnectionUI(false);
+                Show(pb_notconnect);
             }
             catch (Exception ex)
             {
                 Show(pb_wrong);
-
                 MessageBox.Show($"Disconnection Error: {ex.Message}", "Error",
-                              MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-
-        }
-
-        private void button1_Click(object sender, EventArgs e)
-        {
-            if (!string.IsNullOrWhiteSpace(tbSend.Text))
-            {
-                SendCommandAsync(tbSend.Text);
-                tbSend.Clear();
-                Show(pb_working);
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private void trackBar1_Scroll(object sender, EventArgs e)
+        private void UpdateConnectionUI(bool connected)
         {
-            Setpoint = trackBar1.Value;
-            SendCommandAsync($"target:{trackBar1.Value}");
+            btconnect.Enabled = !connected;
+            btdisconnect.Enabled = connected;
+            pictureBox7.Visible = !connected;
+        }
 
-            // Update label
+        private void SaveConnectionSettings()
+        {
+            Properties.Settings.Default.PortName = mtbPortname.Text;
+            Properties.Settings.Default.BaudRate = Convert.ToInt32(cmBuadrite.Text);
+            Properties.Settings.Default.Save();
+        }
+
+        private async void trackBar1_Scroll(object sender, EventArgs e)
+        {
+            _setpoint = trackBar1.Value;
+            await _controller.SetSetpointAsync(trackBar1.Value);
+
             string sign = trackBar1.Value >= 0 ? "+" : "";
             label7.Text = $"{sign}{trackBar1.Value}°";
         }
-        bool _internal;
-        string _value;
-        string command;
-        private void PIDTune(object sender, EventArgs e)
+
+        private async void PIDTune(object sender, EventArgs e)
         {
-            if (_internal) return;
+            if (_internalUpdate) return;
 
             if (sender is NumericUpDown num && num.Tag is string tag)
             {
-                // read the value into two variables the int and the double.
                 int intValue = (int)num.Value;
-                // Assuming 4 decimal place
-                double decimalValue = (double)(num.Value - intValue); // Convert to decimal place
+                double decimalValue = (double)(num.Value - intValue);
+                decimalValue = Math.Round(decimalValue, 4) * 10000;
+                string decimalStr = decimalValue.ToString("0000", CultureInfo.InvariantCulture);
 
-                // convert the decimalValue into string string with out the int valie example: 0.001 > "001"
-                decimalValue = Math.Round(decimalValue, 4); // Round to 4 decimal places
-                decimalValue = decimalValue * 10000; // Convert to integer representation
-                //conver to string like "0000"
-                string decimalval = decimalValue.ToString("0000", CultureInfo.InvariantCulture);
-
-
-                if (tag == "Kpd" || "Kid" == tag || "Kdd" == tag)
+                string command;
+                if (tag == "Kpd" || tag == "Kid" || tag == "Kdd")
                 {
-                    // convert the decimal value to int by multiplying it by 10
-                    command = $"{tag}:{decimalval}";
+                    command = $"{tag}:{decimalStr}";
                 }
                 else
                 {
                     command = $"{tag}:{intValue}";
                 }
-                SendCommandAsync(command);
+
+                await _controller.SendCommandAsync(command);
                 BlinkButton(button2, false);
                 Show(pb_working);
-
-
-
-
-
-                /*
-                // check if the object has Dicemal place > 0 so cross it with 10^dicemal like 1.234 > 1234 into _value.
-                if (num.DecimalPlaces > 0)
-                {
-                    _value = ((double)num.Value * (int)Math.Pow(10, num.DecimalPlaces)).ToString(CultureInfo.InvariantCulture);
-                }
-                else
-                {
-                    _value = num.Value.ToString(CultureInfo.InvariantCulture);
-                }
-
-                string command = $"{tag}:{_value}";
-                SendCommandAsync(command);
-                BlinkButton(button2, false);
-                Show(pb_working);
-                */
             }
         }
 
-
-        private void button2_Click(object sender, EventArgs e)
+        private async void button1_Click(object sender, EventArgs e)
         {
-            SendCommandAsync("save");
+            if (!string.IsNullOrWhiteSpace(tbSend.Text))
+            {
+                await _controller.SendCommandAsync(tbSend.Text);
+                tbSend.Clear();
+                Show(pb_working);
+            }
+        }
+
+        private async void button2_Click(object sender, EventArgs e)
+        {
+            await _controller.SaveParametersAsync();
             BlinkButton(button2, false);
             Show(pb_working);
-
         }
 
         private void button3_Click(object sender, EventArgs e)
         {
             try
             {
-                // Save PID values to settings
                 Properties.Settings.Default.Kp = (int)nudKp.Value;
                 Properties.Settings.Default.Ki = (int)nudKi.Value;
                 Properties.Settings.Default.Kd = (int)nudKd.Value;
@@ -771,7 +293,6 @@ namespace Stabilization
                 AppendToErrorLog("PID values saved successfully.");
                 BlinkButton(button2, false);
                 Show(pb_ok);
-
             }
             catch (Exception ex)
             {
@@ -780,92 +301,313 @@ namespace Stabilization
             }
         }
 
-        #endregion
-
-        #region UI Helper Methods
-        // 6. إضافة طرق مساعدة لمعالجة المعاملات
-        private void ProcessStatusParameters()
+        private async void button4_Click(object sender, EventArgs e)
         {
-            if (_currentParams.Count >= 4)
-            {
-                var pidParams = new PIDParameters
-                {
-                    Kp = _currentParams.GetValueOrDefault("Kp", 0),
-                    Ki = _currentParams.GetValueOrDefault("Ki", 0),
-                    Kd = _currentParams.GetValueOrDefault("Kd", 0),
-                    limit = (int)_currentParams.GetValueOrDefault("Limit", 1),
-                    baseSpeed = (int)_currentParams.GetValueOrDefault("BaseSpeed", 1000),
-                    setpoint = (int)_currentParams.GetValueOrDefault("Target", 0)
-                };
-
-                ShowPIDParameters(pidParams);
-            }
+            await _controller.StopAsync();
+            Show(pb_wrong);
         }
 
-        private void ParseStatusParameter(string data)
+        private async void ReadParams_fun(object sender, EventArgs e)
         {
-            var parts = data.Split(':');
-            if (parts.Length == 2)
-            {
-                string paramName = parts[0].Trim();
-                if (double.TryParse(parts[1].Trim(),
-                                  NumberStyles.Float,
-                                  CultureInfo.InvariantCulture,
-                                  out double value))
-                {
-                    _currentParams[paramName] = value;
-                }
-                else if (int.TryParse(parts[1].Trim(),
-                                  NumberStyles.Float,
-                                  CultureInfo.InvariantCulture,
-                                  out int value2))
-                {
-                    _currentParams[paramName] = value2;
-                }
-            }
+            await _controller.RequestStatusAsync();
+            Show(pb_working);
         }
 
-        // 7. تحسين عرض الأداء
-        private void UpdatePerformanceDisplay()
+        private async void monitorMode_CheckedChanged(object sender, EventArgs e)
         {
-            var now = DateTime.Now;
-            var timeDiff = (now - _lastPerformanceUpdate).TotalSeconds;
-
-            if (timeDiff > 0)
-            {
-                double dataRate = _dataPointsReceived / timeDiff;
-                _lastPerformanceUpdate = now;
-
-                int currentDataCount = _dataPointsReceived;
-                _dataPointsReceived = 0; // إعادة تعيين العداد
-
-                BeginInvoke(new Action(() =>
-                {
-                    AppendToErrorLog($"Performance: {dataRate:F1} Hz | " +
-                                   $"Queue: {_dataQueue.Count} | " +
-                                   $"Buffer: {_serialBuffer?.Length ?? 0} | " +
-                                   $"Points: {currentDataCount}");
-                }));
-            }
+            await _controller.SetMonitorModeAsync(monitorMode.Checked);
         }
-        private void AppendToInfoLog(string data)
+
+        private async void button6_Click(object sender, EventArgs e)
+        {
+            await _controller.SetMonitorModeAsync(false);
+            await Task.Delay(100);
+            await _controller.RequestStatusAsync();
+            await Task.Delay(100);
+            await _controller.SetMonitorModeAsync(true);
+            Show(pb_working);
+        }
+
+        private async void button7_Click(object sender, EventArgs e)
+        {
+            await _controller.ResetAsync();
+            Show(pb_working);
+        }
+
+        private async void numericUpDown1_ValueChanged(object sender, EventArgs e)
+        {
+            if (_internalUpdate) return;
+            _limit = Convert.ToInt16(nudLimit.Value);
+            await _controller.SendCommandAsync($"limit:{_limit}");
+        }
+
+        private async void numericUpDown2_ValueChanged(object sender, EventArgs e)
+        {
+            if (_internalUpdate) return;
+            _baseSpeed = Convert.ToInt16(nudBaseSpeed.Value);
+            await _controller.SendCommandAsync($"baseSpeed:{_baseSpeed}");
+        }
+
+        private void OnDataPointReceived(object sender, SerialDataPoint dataPoint)
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(() => AppendToInfoLog(data)));
+                BeginInvoke(new Action(() => OnDataPointReceived(sender, dataPoint)));
                 return;
             }
 
-            if (rtbInfoData.Lines.Length > 1000) // Limit display size
+            // Add to plot queue
+            lock (_plotQueueLock)
+            {
+                _plotDataQueue.Enqueue(dataPoint);
+            }
+
+            // Update raw data display (throttled)
+            if (!cbDisableLogs.Checked)
+            {
+                UpdateRawDataDisplay($"{dataPoint.Millis}:{dataPoint.Angle:F2}:{dataPoint.Output}");
+            }
+
+            // Log data
+            _logger?.Record((int)_setpoint, dataPoint.Angle, dataPoint.Output, dataPoint.Millis);
+        }
+        bool DEBUG = true;
+        private void PlotTimer_Tick(object sender, EventArgs e)
+        {
+            _plotUpdatesCount++;
+
+           if (!DEBUG) Debug.WriteLine("PlotTimer_Tick:" + DateTime.Now.ToString("ss.fff") + "   " + _plotUpdatesCount);
+
+
+            try
+            {
+                var currentTime = DateTime.Now;
+
+                // Calculate time since last plot (for jitter measurement)
+                double intervalMs = (currentTime - _lastPlotTime).TotalMilliseconds;
+                _lastPlotTime = currentTime;
+
+                // Store interval for jitter calculation
+                _plotIntervals.Add(intervalMs);
+                if (_plotIntervals.Count > 100) // Keep last 100 samples
+                    _plotIntervals.RemoveAt(0);
+
+                SerialDataPoint[] pointsToPlot;
+                lock (_plotQueueLock)
+                {
+                    if (_plotDataQueue.Count == 0) return;
+
+                    pointsToPlot = _plotDataQueue.ToArray();
+                    _plotDataQueue.Clear();
+                }
+
+                // Update sample counters
+                _samplesThisSecond += pointsToPlot.Length;
+                _totalSamplesPlotted += pointsToPlot.Length;
+
+                foreach (var point in pointsToPlot)
+                {
+                    double scaledOutput = 0; 
+                    if (_limit > 0) 
+                    {
+                        scaledOutput = (point.Output - _baseSpeed) * 59.0 / _limit; // ms
+                    }
+
+                    _plotService.AddDataPoint(point, _setpoint, scaledOutput); // 14 ms
+
+                }
+
+                // Update performance metrics every second
+                UpdatePerformanceMetrics(); // ms
+
+            }
+            catch (Exception ex)
+            {
+                AppendToErrorLog($"Plot timer error: {ex.Message}");
+            }  // ms
+           if(!DEBUG) Debug.WriteLine("---FINISH:" + DateTime.Now.ToString("ss.fff"));
+
+        }
+
+        private void UpdatePerformanceMetrics()
+        {
+            var now = DateTime.Now;
+            var timeSinceLastUpdate = (now - _lastSecondUpdate).TotalSeconds;
+
+            if (timeSinceLastUpdate >= 1.0) // Update every second
+            {
+                // Calculate samples per second
+                _samplesPerSecond = (int)(_samplesThisSecond / timeSinceLastUpdate);
+                _samplesThisSecond = 0;
+                _lastSecondUpdate = now;
+
+                // Calculate jitter (standard deviation of intervals)
+                if (_plotIntervals.Count > 1)
+                {
+                    double averageInterval = _plotIntervals.Average();
+                    double sumOfSquares = _plotIntervals.Sum(interval =>
+                        Math.Pow(interval - averageInterval, 2));
+                    double jitterMs = Math.Sqrt(sumOfSquares / (_plotIntervals.Count - 1));
+
+                    _averagePlotInterval = averageInterval;
+                    _maxJitter = _plotIntervals.Max() - _plotIntervals.Min();
+
+                    // Update performance display
+                    UpdatePerformanceDisplay(_samplesPerSecond, jitterMs, averageInterval);
+                }
+            }
+        }
+        private void UpdatePerformanceDisplay(int samplesPerSecond, double jitterMs, double averageIntervalMs)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => UpdatePerformanceDisplay(samplesPerSecond, jitterMs, averageIntervalMs)));
+                return;
+            }
+
+            if ((DateTime.Now - _lastPerformanceLog).TotalSeconds >= 3.0)
+            {
+                double elapsed = (DateTime.Now - _lastPlotUpdateTime).TotalSeconds;
+                double updatesPerSecond = elapsed > 0 ? _plotUpdatesCount / elapsed : 0.0;
+
+                // تردد الإرسال من Arduino (Serial Hz)
+                double serialHz = _serialMessagesHz > 0 ? _serialMessagesHz : 63.0;
+                double idealInterval = 1000.0 / serialHz; // الفترة المثالية بالملّي ثانية
+
+                // حساب Jitter الفعلي استناداً إلى الفروق عن الفترة المثالية
+                double rmsJitter = 0.0;
+                if (_plotIntervals.Count > 1)
+                {
+                    var diffs = _plotIntervals.Select(x => Math.Pow(x - idealInterval, 2));
+                    rmsJitter = Math.Sqrt(diffs.Average());
+                }
+
+                string perfLine =
+                    $"Updates/S: {updatesPerSecond,4:F1} | " +
+                    $"Interval: {averageIntervalMs,6:F2}ms | " +
+                    $"Jitter: {rmsJitter,6:F2}ms | " +
+                    $"MaxJ: {_plotIntervals.DefaultIfEmpty(0).Max() - _plotIntervals.DefaultIfEmpty(0).Min(),6:F2}ms | " +
+                    $"Serial: {serialHz,4:F0} Hz";
+
+                AppendToPerformancLog(perfLine);
+
+                _lastPerformanceLog = DateTime.Now;
+                _plotUpdatesCount = 0;
+                _lastPlotUpdateTime = DateTime.Now;
+            }
+        }
+        private void ResetPerformanceStats()
+        {
+            _samplesPerSecond = 0;
+            _samplesThisSecond = 0;
+            _plotIntervals.Clear();
+            _averagePlotInterval = 0;
+            _maxJitter = 0;
+            _totalSamplesPlotted = 0;
+            _lastSecondUpdate = DateTime.Now;
+            _lastPlotTime = DateTime.Now;
+            _lastPerformanceLog = DateTime.Now;
+
+            AppendToErrorLog("[PERF] Performance statistics reset");
+        }
+
+        // أضف زر في الواجهة لاستدعاء هذه الدالة
+        private void buttonResetStats_Click(object sender, EventArgs e)
+        {
+            ResetPerformanceStats();
+        }
+
+        private void OnParametersUpdated(object sender, PIDParameters parameters)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => OnParametersUpdated(sender, parameters)));
+                return;
+            }
+
+            _internalUpdate = true;
+
+            // Extract integer and fractional parts
+            int kpInt = (int)Math.Floor(parameters.Kp);
+            decimal kpFrac = Convert.ToDecimal(parameters.Kp - kpInt);
+            int kiInt = (int)Math.Floor(parameters.Ki);
+            decimal kiFrac = Convert.ToDecimal(parameters.Ki - kiInt);
+            int kdInt = (int)Math.Floor(parameters.Kd);
+            decimal kdFrac = Convert.ToDecimal(parameters.Kd - kdInt);
+
+            nudKp.Value = kpInt;
+            nudKpd.Value = kpFrac;
+            nudKi.Value = kiInt;
+            nudKid.Value = kiFrac;
+            nudKd.Value = kdInt;
+            nudKdd.Value = kdFrac;
+
+            trackBar1.Value = parameters.Setpoint;
+            string sign = trackBar1.Value >= 0 ? "+" : "";
+            label7.Text = $"{sign}{trackBar1.Value}°";
+
+            nudLimit.Value = parameters.Limit;
+            nudBaseSpeed.Value = parameters.BaseSpeed;
+
+            _baseSpeed = parameters.BaseSpeed;
+            _limit = parameters.Limit;
+
+            _internalUpdate = false;
+        }
+
+        private void OnStatusChanged(object sender, SystemStatus status)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => OnStatusChanged(sender, status)));
+                return;
+            }
+
+            // Update status indicators based on connection state
+            if (status.IsConnected)
+            {
+                Show(pb_ok);
+            }
+            else
+            {
+                Show(pb_notconnect);
+            }
+        }
+
+        private void OnMessageReceived(object sender, string message)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => OnMessageReceived(sender, message)));
+                return;
+            }
+
+            if (message.StartsWith(">>"))
+            {
+                AppendToInfoLog(message);
+                Show(pb_ok);
+            }
+            else
+            {
+                AppendToErrorLog(message);
+            }
+        }
+
+        #region UI Helper Methods
+
+        private void AppendToInfoLog(string data)
+        {
+            if (rtbInfoData.Lines.Length > 1000)
             {
                 rtbInfoData.Clear();
             }
             rtbInfoData.AppendText($"{data}{Environment.NewLine}");
             rtbInfoData.ScrollToCaret();
         }
+
         private void UpdateRawDataDisplay(string data)
         {
-            if (rtbRawData.Lines.Length > 1000) // Limit display size
+            if (rtbRawData.Lines.Length > 1000)
             {
                 rtbRawData.Clear();
             }
@@ -875,24 +617,35 @@ namespace Stabilization
             rtbRawData.ScrollToCaret();
         }
 
+        private void AppendToPerformancLog(string message)
+        {
+            rtbPerformance.AppendText($"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
+            rtbPerformance.SelectionStart = rtbPerformance.Text.Length;
+            rtbPerformance.ScrollToCaret();
+        }
         private void AppendToErrorLog(string message)
         {
-            if (InvokeRequired)
+            if (rtbError.InvokeRequired)
             {
-                BeginInvoke(new Action(() => AppendToErrorLog(message)));
-                return;
+                rtbError.Invoke(new Action(() =>
+                {
+                    rtbError.AppendText($"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
+                    rtbError.SelectionStart = rtbPerformance.Text.Length;
+                    rtbError.ScrollToCaret();
+                    ;
+                }));
             }
-            rtbErrors.AppendText($"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
-            rtbErrors.SelectionStart = rtbErrors.Text.Length;
-            rtbErrors.ScrollToCaret();
+            else
+            {
+                rtbError.AppendText($"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
+                rtbError.SelectionStart = rtbPerformance.Text.Length;
+                rtbError.ScrollToCaret();
+
+            }
         }
+
         private void Show(PictureBox pb)
         {
-            if (InvokeRequired)
-            {
-                BeginInvoke(new Action(() => Show(pb)));
-                return;
-            }
             pb.BringToFront();
         }
 
@@ -908,156 +661,7 @@ namespace Stabilization
 
         #endregion
 
-        #region Error Handling
-
-        private void Arduino_ErrorReceived(object sender, SerialErrorReceivedEventArgs e)
-        {
-            AppendToErrorLog($"Serial error: {e.EventType}");
-        }
-
-        #endregion
-
-        #region Cleanup
-
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            try
-            {
-                _plotTimer?.Stop();
-                _processingCancellation?.Cancel();
-                _plottingCancellation?.Cancel();
-
-                if (arduino?.IsOpen == true)
-                {
-                    arduino.Close();
-                }
-
-                _processingCancellation?.Dispose();
-                _plottingCancellation?.Dispose();
-                _plotTimer?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                // Log cleanup errors but don't prevent closing
-                System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}");
-            }
-
-            base.OnFormClosing(e);
-        }
-
-        #endregion
-        //22l
-        private void button4_Click(object sender, EventArgs e)
-        {
-            SendCommandAsync("stop");
-            SendCommand("stop");
-            Show(pb_wrong);
-        }
-        bool READ_PARAMS = false;
-        private void ReadParams_fun(object sender, EventArgs e)
-        {
-            SendCommandAsync("status");
-            READ_PARAMS = true;
-            _readingStatus = false;
-            _currentParams.Clear();
-
-        }
-
-        private void monitorMode_CheckedChanged(object sender, EventArgs e)
-        {
-            SendCommandAsync(monitorMode.Checked ? "monitor:on" : "monitor:off");
-        }
-
-
-        private void ShowPIDParameters(PIDParameters pidParams)
-        {
-            // Kp
-            int kpInt = (int)Math.Floor(pidParams.Kp);
-            decimal kpFrac = Convert.ToDecimal(pidParams.Kp - kpInt);
-            int kiInt = (int)Math.Floor(pidParams.Ki);
-            decimal kiFrac = Convert.ToDecimal(pidParams.Ki - kiInt);
-            int kdInt = (int)Math.Floor(pidParams.Kd);
-            decimal kdFrac = Convert.ToDecimal(pidParams.Kd - kdInt);
-            // update the UI thread:
-            if (InvokeRequired)
-            {
-                BeginInvoke(new Action(() =>
-                {
-                    _internal = true; // Prevent recursive calls
-                    nudKp.Value = kpInt;
-                    nudKpd.Value = kpFrac;
-                    // Ki
-                    nudKi.Value = kiInt;
-                    nudKid.Value = kiFrac;
-
-                    // Kd
-                    nudKd.Value = kdInt;
-                    nudKdd.Value = kdFrac;
-
-                    // Setpoint
-                    trackBar1.Value = Convert.ToInt16(pidParams.setpoint);
-                    string sign = trackBar1.Value >= 0 ? "+" : "";
-                    label7.Text = $"{sign}{trackBar1.Value}°";
-
-                    // limit
-                    nudLimit.Value = pidParams.limit;
-
-                    //baseSpeed
-                    nudBaseSpeed.Value = pidParams.baseSpeed;
-                    _internal = false;
-                }));
-            }
-        }
-
-        private void button6_Click(object sender, EventArgs e)
-        {
-            SendCommandAsync("monitor:off");
-            Thread.Sleep(101);
-            SendCommandAsync("status");
-            READ_PARAMS = true;
-            _readingStatus = false;
-            _currentParams.Clear();
-            SendCommandAsync("monitor:on");
-
-        }
-
-        private void panel3_Paint(object sender, PaintEventArgs e)
-        {
-
-        }
-
-        private void button7_Click(object sender, EventArgs e)
-        {
-            SendCommandAsync("reset");
-            Show(pb_working);
-
-        }
-
-        private void numericUpDown1_ValueChanged(object sender, EventArgs e)
-        {
-            if (_internal) return;      // يُنفَّذ فقط عند تعديل المستخدم
-            // sendlimit: command with the value of this.
-            limit = Convert.ToInt16(nudLimit.Value);
-            SendCommandAsync($"limit:{limit}");
-
-        }
-
-        private void numericUpDown2_ValueChanged(object sender, EventArgs e)
-        {
-            if (_internal) return;      // يُنفَّذ فقط عند تعديل المستخدم
-
-            baseSpeed = Convert.ToInt16(nudBaseSpeed.Value);
-            SendCommandAsync($"baseSpeed:{baseSpeed}");
-
-        }
-
-
-
-        #region logger
-        private AsyncLogger logger;
-        private int timestep;
-        // Add this field to Form1 to store the initial timestamp for logging
-        private DateTime? _logStartTime = null;
+        #region Logger Methods
 
         private void logactions(object sender, EventArgs e)
         {
@@ -1067,22 +671,20 @@ namespace Stabilization
             {
                 case "create":
                     {
-                        logger?.Dispose();
-                        timestep = 0;
-                        logger = new AsyncLogger("experimentData");
+                        _logger?.Dispose();
+                        _logger = new AsyncLogger("experimentData");
                         log_usable.Enabled = true;
                         log_unusable.Enabled = true;
                         log_start.Enabled = false;
                         Show(pb_ok);
-                        _logStartTime = null;
                         Properties.Settings.Default.loggerName = loger_name.Text;
                         Properties.Settings.Default.Save();
                         return;
                     }
                 case "accept":
                     {
-                        logger?.Finish(true);
-                        logger = null;
+                        _logger?.Finish(true);
+                        _logger = null;
 
                         log_usable.Enabled = false;
                         log_unusable.Enabled = false;
@@ -1092,8 +694,8 @@ namespace Stabilization
                     }
                 case "unusable":
                     {
-                        logger?.Finish(false);
-                        logger = null;
+                        _logger?.Finish(false);
+                        _logger = null;
                         log_usable.Enabled = false;
                         log_unusable.Enabled = false;
                         log_start.Enabled = true;
@@ -1104,27 +706,60 @@ namespace Stabilization
             }
         }
 
-
         #endregion
 
-        private void panel2_Paint(object sender, PaintEventArgs e)
-        {
+        #region Form Events
 
-        }
+        private void panel3_Paint(object sender, PaintEventArgs e) { }
+        private void panel2_Paint(object sender, PaintEventArgs e) { }
 
         private void linkLabel1_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
             info_panel.Visible = !info_panel.Visible;
         }
-    }
-
-    // إضافة method للحصول على القيم مع قيمة افتراضية
-    public static class DictionaryExtensions
-    {
-        public static TValue GetValueOrDefault<TKey, TValue>(this Dictionary<TKey, TValue> dictionary,
-                                                            TKey key, TValue defaultValue)
+        protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            return dictionary.ContainsKey(key) ? dictionary[key] : defaultValue;
+            try
+            {
+
+  
+            // Stop timers first
+            _plotTimer?.Stop();
+
+            // Dispose without waiting
+            _controller?.Dispose();
+            _plotTimer?.Dispose();
+
+
+            _logger?.Finish(false);
+            _logger?.Dispose();
+
+            base.OnFormClosing(e);
+            }
+            catch (Exception)
+            {
+
+                Application.Exit();
+            }
+        }
+        private void OnFormClosing(object sender, FormClosingEventArgs e)
+        {
+            // OnFormClosing(e);
+        }
+
+    }
+    // Add the following extension method to provide the missing 'GetCommunicator' functionality.
+
+    public static class BalancingPlatformControllerExtensions
+    {
+        public static ISerialCommunicator GetCommunicator(this BalancingPlatformController controller)
+        {
+            // Use reflection to access the private _communicator field
+            var field = typeof(BalancingPlatformController).GetField("_communicator",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            return field?.GetValue(controller) as ISerialCommunicator;
         }
     }
+
+    #endregion
 }

@@ -20,7 +20,7 @@ namespace Stabilization
         {
             Directory.CreateDirectory(dataName);
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            _filePath = Path.Combine(dataName, $"{dataName}_{timestamp}.log");
+            _filePath = Path.Combine(dataName, $"{dataName}_{timestamp}.csv");
             _writer = new StreamWriter(new FileStream(_filePath, FileMode.Create, FileAccess.Write, FileShare.Read))
             { AutoFlush = true };
             _queue = new BlockingCollection<(long, int, double, int)>();
@@ -51,7 +51,7 @@ namespace Stabilization
 
             var suffix = isUsable ? "_usable" : "_unusable";
             var dir = Path.GetDirectoryName(_filePath);
-            var name = Path.GetFileNameWithoutExtension(_filePath) + suffix + ".log";
+            var name = Path.GetFileNameWithoutExtension(_filePath) + suffix + ".csv";
             File.Move(_filePath, Path.Combine(dir, name));
         }
 

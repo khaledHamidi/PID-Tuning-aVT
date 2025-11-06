@@ -25,7 +25,7 @@ namespace Stabilization.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("COM9")]
+        [global::System.Configuration.DefaultSettingValueAttribute("COM1")]
         public string PortName {
             get {
                 return ((string)(this["PortName"]));
@@ -37,7 +37,7 @@ namespace Stabilization.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("115200")]
+        [global::System.Configuration.DefaultSettingValueAttribute("9600")]
         public long BaudRate {
             get {
                 return ((long)(this["BaudRate"]));
